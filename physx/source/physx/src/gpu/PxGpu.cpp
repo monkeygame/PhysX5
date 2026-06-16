@@ -171,6 +171,15 @@ physx::PxPhysicsGpu* PxGetPhysicsGpu()
 	return NULL;
 }
 
+#else // PX_PHYSX_GPU_STATIC
+
+extern "C" physx::PxPhysicsGpu* PxGpuCreatePhysicsGpu();
+
+physx::PxPhysicsGpu* PxGetPhysicsGpu()
+{
+	return PxGpuCreatePhysicsGpu();
+}
+
 #endif // PX_PHYSX_GPU_STATIC
 
 #endif // PX_SUPPORT_GPU_PHYSX
