@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<preset name="vc17win64-static-mt" comment="VC17 Win64 static libs + /MT (for physx5-native-plugin)">
+  <platform targetPlatform="win64" compiler="vc17" />
+  <CMakeSwitches>
+    <cmakeSwitch name="PX_GENERATE_STATIC_LIBRARIES" value="True" comment="Generate static libraries" />
+    <cmakeSwitch name="NV_USE_STATIC_WINCRT" value="True" comment="Use the statically linked windows CRT" />
+    <cmakeSwitch name="NV_USE_DEBUG_WINCRT" value="True" comment="Use the debug version of the CRT" />
+    <cmakeSwitch name="PX_BUILDSNIPPETS" value="False" comment="Generate the snippets" />
+    <cmakeSwitch name="PX_BUILDPVDRUNTIME" value="False" comment="Generate the OmniPVD project" />
+    <cmakeSwitch name="PX_GENERATE_GPU_PROJECTS" value="True" comment="Generate the GPU projects, if possible." />
+    <cmakeSwitch name="PX_GENERATE_GPU_PROJECTS_ONLY" value="False" comment="Generate ONLY the GPU projects, if possible." />
+    <cmakeSwitch name="PX_SCALAR_MATH" value="False" comment="Disable SIMD math" />
+    <cmakeSwitch name="PX_FLOAT_POINT_PRECISE_MATH" value="False" comment="Float point precise math" />
+    <cmakeSwitch name="PX_GENERATE_GPU_STATIC_LIBRARIES" value="True" comment="Generate PhysXGPU static libraries (PhysXGpu_static_64.lib, no PhysXGpu_64.dll)" />
+    <cmakeSwitch name="PX_GENERATE_GPU_REDUCED_ARCHITECTURES" value="False" comment="Generate only a reduced number of GPU architectures for faster compilation" />
+  </CMakeSwitches>
+  <CMakeParams>
+    <!-- Relative to PhysX5/physx (PHYSX_ROOT_DIR); cmake_generate_projects.py prepends that root.
+         Resolves to sibling SDK/Physx5 (same parent as physx5-native-plugin and PhysX5). -->
+    <cmakeParam name="CMAKE_INSTALL_PREFIX" value="../../SDK/Physx5" comment="Install to ../SDK/Physx5 relative to physx5-native-plugin" />
+  </CMakeParams>
+</preset>
