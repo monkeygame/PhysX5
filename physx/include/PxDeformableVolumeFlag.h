@@ -71,6 +71,13 @@ struct PxDeformableVolumeDataFlag
 		eSIM_VELOCITY = 1 << 2,                 //!< The simulation mesh's velocities
 		eREST_POSITION_INVMASS = 1 << 3,        //!< The collision mesh's rest positions
 
+		// GM-PathB: signals that the per-tetrahedron elastic rest state (inverse rest matrices Qinv of the
+		// simulation and collision meshes) and the per-tetrahedron material indices have been recomputed
+		// in-place on the cooked mesh/aux data (topology unchanged). The GPU controller re-packs and
+		// re-uploads the blocked rest poses + material indices for this volume. Set via
+		// PxDeformableVolumeExt::updateRestShape(). NOT part of eALL: copyToDevice() does not act on it.
+		eSIM_REST_POSE = 1 << 4,
+
 		eALL = ePOSITION_INVMASS | eSIM_POSITION_INVMASS | eSIM_VELOCITY | eREST_POSITION_INVMASS
 	};
 };

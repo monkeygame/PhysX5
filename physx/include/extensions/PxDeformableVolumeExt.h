@@ -47,6 +47,15 @@ class PxInsertionCallback;
 class PxDeformableVolumeMesh;
 
 /**
+\brief GM-PathB: sentinel per-tetrahedron material index for PxDeformableVolumeExt::updateRestShape().
+
+An entry equal to this value in the newPerTetMaterialIndices array means "leave this tetrahedron's existing local
+material index unchanged". Lets a caller retag only a subset of tetrahedra (e.g. the hardened region) without
+knowing or clobbering the original per-tet material indices of the rest of the mesh.
+*/
+#define PX_DEFORMABLE_VOLUME_KEEP_MATERIAL PxU16(0xFFFF)
+
+/**
 \brief Utility functions for use with PxDeformableVolume and subclasses
 */
 class PxDeformableVolumeExt
@@ -104,6 +113,41 @@ public:
 	\see PxDeformableVolume
 	*/
 	static void transform(PxDeformableVolume& deformableVolume, const PxTransform& transform, const PxReal scale, PxVec4* simPositionsPinned, PxVec4* simVelocitiesPinned, PxVec4* collPositionsPinned, PxVec4* restPositionsPinned);
+
+	/**
+	\brief GM-PathB: Rebakes a deformable volume's elastic rest shape and per-tetrahedron materials in place.
+
+	Recomputes the simulation mesh's per-tetrahedron inverse rest matrices (Qinv, the reference the FEM solver
+	pulls back towards) from a new set of rest vertex positions, and optionally overwrites the per-tetrahedron
+	material indices. The tetrahedral topology (vertex count, tetrahedron count, connectivity) MUST be unchanged;
+	only vertex positions and material assignments may differ. This lets a deformation be baked permanently
+	(the body will no longer spring back to its original shape) and lets tetrahedra be switched to a stiffer
+	material, all without re-cooking the mesh or rebuilding the actor (velocities, contacts and attachments are
+	preserved).
+
+	This call updates the host-side cooked/aux data and flags the volume dirty with
+	PxDeformableVolumeDataFlag::eSIM_REST_POSE; the GPU controller re-packs and re-uploads the blocked rest poses
+	and material indices during the next PxScene::simulate(). It must not be called between the start of
+	PxScene::simulate() and PxScene::fetchResults().
+
+	\note Assumes the simulation and collision meshes share the same tetrahedral topology and vertex layout, which
+	is the case when the volume is cooked from a single tetrahedron mesh (the no-voxel path). The collision mesh's
+	per-tetrahedron rest matrices are intentionally left untouched; the simulation mesh rest state governs the
+	elastic (spring-back) behaviour.
+
+	\param[in] deformableVolume The deformable volume whose rest shape is rebaked
+	\param[in] newRestVerticesLocal New rest vertex positions in the volume's local (actor) space, one per simulation-mesh vertex
+	\param[in] numVertices Number of entries in newRestVerticesLocal; must equal the simulation mesh vertex count
+	\param[in] newPerTetMaterialIndices Optional new per-tetrahedron local material indices (index into the shape's material table), one per
+	simulation-mesh tetrahedron; pass NULL to keep the whole current material assignment. Any entry equal to
+	PX_DEFORMABLE_VOLUME_KEEP_MATERIAL leaves that tetrahedron's existing material index untouched (so callers can retag only a
+	subset of tetrahedra without knowing/overwriting the others' original indices; if the mesh was cooked single-material, its
+	lazily-allocated per-tet array is initialised to the base material index 0 before the non-sentinel entries are applied).
+	\param[in] numTets Number of entries in newPerTetMaterialIndices; must equal the simulation mesh tetrahedron count (ignored when newPerTetMaterialIndices is NULL)
+
+	\see PxDeformableVolume PxDeformableVolumeDataFlag::eSIM_REST_POSE
+	*/
+	static void updateRestShape(PxDeformableVolume& deformableVolume, const PxVec3* newRestVerticesLocal, PxU32 numVertices, const PxU16* newPerTetMaterialIndices, PxU32 numTets);
 
 	/**
 	\brief Updates the collision mesh's vertex positions to match the simulation mesh's transformation and scale.

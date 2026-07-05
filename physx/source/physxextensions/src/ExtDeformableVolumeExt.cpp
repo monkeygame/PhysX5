@@ -31,6 +31,7 @@
 
 #include "GuTetrahedronMesh.h"
 #include "GuTetrahedronMeshUtils.h"
+#include "foundation/PxAllocator.h" // GM-PathB: PX_ALLOC for lazy per-tet material index array
 #include "cooking/PxCooking.h"
 #include "PxPhysics.h"
 #include "extensions/PxRemeshingExt.h"
@@ -238,6 +239,123 @@ void PxDeformableVolumeExt::transform(PxDeformableVolume& deformableVolume, cons
 		m.column2 = PxVec3(row0.z, row1.z, row2.z);
 	}
 
+}
+
+// GM-PathB: recompute per-tetrahedron inverse rest matrices (Qinv) for a tet mesh from a new set of rest
+// vertex positions, matching the cooker's convention exactly (see Gu::computeTetrahedronVolume /
+// computeRestPoseAndPointMass in GuCookingTetrahedronMesh.cpp). restPoses is indexed by original tet index,
+// which is the ordering used for the simulation mesh's mGridModelTetraRestPoses.
+static void gmRecomputeTetRestPoses(const PxTetrahedronMesh& mesh, const PxVec3* verts, PxU32 numVerts, PxMat33* restPoses, PxU32 numTets)
+{
+	PX_UNUSED(numVerts);
+	const bool sixteenBit = mesh.getTetrahedronMeshFlags() & PxTetrahedronMeshFlag::e16_BIT_INDICES;
+	const PxU32* t32 = reinterpret_cast<const PxU32*>(mesh.getTetrahedrons());
+	const PxU16* t16 = reinterpret_cast<const PxU16*>(mesh.getTetrahedrons());
+
+	for (PxU32 i = 0; i < numTets; ++i)
+	{
+		const PxU32 i0 = sixteenBit ? t16[4 * i + 0] : t32[4 * i + 0];
+		const PxU32 i1 = sixteenBit ? t16[4 * i + 1] : t32[4 * i + 1];
+		const PxU32 i2 = sixteenBit ? t16[4 * i + 2] : t32[4 * i + 2];
+		const PxU32 i3 = sixteenBit ? t16[4 * i + 3] : t32[4 * i + 3];
+
+		// Edge matrix Q = [x1-x0, x2-x0, x3-x0]; det(Q) = 6*volume, matching Gu::computeTetrahedronVolume().
+		const PxVec3 e0 = verts[i1] - verts[i0];
+		const PxVec3 e1 = verts[i2] - verts[i0];
+		const PxVec3 e2 = verts[i3] - verts[i0];
+		const PxMat33 Q(e0, e1, e2);
+		const PxReal det = Q.getDeterminant();
+
+		// GM-PathB robustness: scale-invariant validity test using the SIGNED normalized determinant
+		// det / (|e0|*|e1|*|e2|). A healthy, correctly-wound rest tet has this well ABOVE zero (~0.1-0.7); a
+		// near-flat tet -> ~0; and an INVERTED (flipped-winding) tet -> NEGATIVE. Baking an inverted or
+		// near-degenerate tet as the rest pose makes the co-rotational rotation extraction (extractRotation on a
+		// reflected/singular F) diverge -> NaN that then propagates across the whole body. Such tets appear mainly
+		// at the hardened/non-hardened BOUNDARY (hybrid tets: some verts baked to the deformed rest, some still at
+		// the original rest, which can flip the tet). We emit a ZERO rest pose for them; the GPU solver treats a
+		// zero Qinv as "no constraint" and skips the tet (softBodyGM.cu), which is stable and moves NO vertices, so
+		// the hardened shape is preserved. Solver-produced deformed tets are non-degenerate and correctly wound, so
+		// hardened INTERIOR tets pass this test unchanged.
+		const PxReal denom = e0.magnitude() * e1.magnitude() * e2.magnitude();
+		PxMat33 QInv;
+		if (denom < 1e-18f || !PxIsFinite(det) || det < 1e-4f * denom)
+			QInv = PxMat33(PxZero);
+		else
+			QInv = Q.getInverse();
+
+		restPoses[i] = QInv;
+	}
+}
+
+void PxDeformableVolumeExt::updateRestShape(PxDeformableVolume& deformableVolume, const PxVec3* newRestVerticesLocal, PxU32 numVertices, const PxU16* newPerTetMaterialIndices, PxU32 numTets)
+{
+	PxTetrahedronMesh* simMesh = deformableVolume.getSimulationMesh();
+	if (simMesh == NULL || newRestVerticesLocal == NULL)
+		return;
+
+	Gu::DeformableVolumeAuxData* auxData = static_cast<Gu::DeformableVolumeAuxData*>(deformableVolume.getDeformableVolumeAuxData());
+	if (auxData == NULL)
+		return;
+
+	const PxU32 nbSimVerts = simMesh->getNbVertices();
+	const PxU32 nbSimTets = simMesh->getNbTetrahedrons();
+
+	if (numVertices != nbSimVerts)
+		return; // topology mismatch: GM-PathB requires an unchanged simulation mesh vertex layout.
+
+	// Rebake the simulation mesh's elastic rest state (governs spring-back). Stored in original tet order;
+	// the GPU controller re-packs it into the partitioned/blocked layout on the eSIM_REST_POSE dirty flag.
+	gmRecomputeTetRestPoses(*simMesh, newRestVerticesLocal, numVertices, auxData->getGridModelRestPosesFast(), nbSimTets);
+
+	// Optionally re-assign per-tetrahedron local material indices (index into the shape's material table).
+	// copyTetraRestPoses() on the GPU side reads the simulation mesh's per-tet material indices.
+	if (newPerTetMaterialIndices != NULL && numTets == nbSimTets)
+	{
+		// getMaterials()/mMaterialIndices live on the internal Gu::TetrahedronMesh, not the public PxTetrahedronMesh.
+		Gu::TetrahedronMesh* simMeshGu = static_cast<Gu::TetrahedronMesh*>(simMesh);
+		PxU16* simMaterials = simMeshGu->mMaterialIndices;
+		if (simMaterials == NULL)
+		{
+			// GM-PathB: the mesh was cooked single-material, so there is no per-tet material array. Lazily
+			// allocate one (freed by ~TetrahedronMesh via PX_FREE(mMaterialIndices)) so hardened tets can
+			// reference a second (stiffer) material after the shape's material table is extended at runtime.
+			// Initialise every tet to the base material index (0); the non-sentinel entries below then retag
+			// only the hardened tets, leaving the rest on the base material.
+			simMaterials = reinterpret_cast<PxU16*>(PX_ALLOC(sizeof(PxU16) * nbSimTets, "GM-PathB mMaterialIndices"));
+			simMeshGu->mMaterialIndices = simMaterials;
+			if (simMaterials != NULL)
+			{
+				for (PxU32 i = 0; i < nbSimTets; ++i)
+					simMaterials[i] = 0;
+			}
+		}
+		if (simMaterials != NULL)
+		{
+			// Only overwrite entries the caller explicitly set; PX_DEFORMABLE_VOLUME_KEEP_MATERIAL preserves the
+			// tet's original local material index (so an originally multi-material volume is not clobbered when
+			// only a subset of tets is being hardened).
+			for (PxU32 i = 0; i < nbSimTets; ++i)
+			{
+				if (newPerTetMaterialIndices[i] != PX_DEFORMABLE_VOLUME_KEEP_MATERIAL)
+					simMaterials[i] = newPerTetMaterialIndices[i];
+			}
+		}
+	}
+
+	deformableVolume.markDirty(PxDeformableVolumeDataFlag::eSIM_REST_POSE);
+
+	// GM-PathB DIAGNOSTIC: confirm CPU-side rebake + dirty flag, and expose the volume's GPU remap index so it
+	// can be correlated with the GPU-side updateUserData logs. Remove once the pipeline is validated.
+	{
+		const PxMat33* qinv = auxData->getGridModelRestPosesFast();
+		const PxU32 gpuIndex = deformableVolume.getGpuDeformableVolumeIndex();
+		PxGetFoundation().error(PxErrorCode::eDEBUG_INFO, PX_FL,
+			"[GM-PathB][updateRestShape] gpuIndex=%u nbSimVerts=%u nbSimTets=%u newRest0=(%.4f,%.4f,%.4f) Qinv0.c0=(%.5f,%.5f,%.5f) matChange=%d markDirty(eSIM_REST_POSE)",
+			gpuIndex, nbSimVerts, nbSimTets,
+			newRestVerticesLocal[0].x, newRestVerticesLocal[0].y, newRestVerticesLocal[0].z,
+			qinv[0].column0.x, qinv[0].column0.y, qinv[0].column0.z,
+			(newPerTetMaterialIndices != NULL) ? 1 : 0);
+	}
 }
 
 void PxDeformableVolumeExt::updateEmbeddedCollisionMesh(PxDeformableVolume& deformableVolume, PxVec4* simPositionsPinned, PxVec4* collPositionsPinned)

@@ -237,6 +237,14 @@ namespace physx
 			const Gu::DeformableVolumeAuxData* softBodyAuxData, const PxU16* materialsHandles, PxsHeapMemoryAllocator* alloc);
 		static void computeBasisMatrix(PxMat33* restPoses, const Gu::DeformableVolumeMesh* tetMesh);
 
+		// GM-PathB: re-pack the simulation mesh's blocked rest poses (Qinv) and per-tetrahedron material handles
+		// from the (in-place updated) aux/sim data into caller-provided host staging buffers, using the exact same
+		// partition ordering as initialTetData(). Used to re-upload the rest state of an existing soft body when
+		// PxDeformableVolumeExt::updateRestShape() has rebaked it. Sizes: blockRestPosesOut = ceil(numTetsGM/32)
+		// PxgMat33Block; orderedMatOut / matOut = numTetsGM PxU16 each.
+		static void repackSimTetraRestPosesAndMaterials(PxgMat33Block* blockRestPosesOut, PxU16* orderedMatOut, PxU16* matOut,
+			const Gu::TetrahedronMesh* simTetMesh, const Gu::DeformableVolumeAuxData* softBodyAuxData, const PxU16* materialsHandles);
+
 	};
 }
 

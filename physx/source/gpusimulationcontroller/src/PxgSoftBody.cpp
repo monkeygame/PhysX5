@@ -110,6 +110,17 @@ static void copyTetraRestPoses(PxU16* destOrderedMaterialIndices, PxU16* destMat
 	}
 }
 
+// GM-PathB: re-pack the blocked GM rest poses + per-tet material handles from the (in-place updated) aux/sim
+// data, reusing the identical partition ordering as initialTetData(). Fills caller-provided host staging.
+void PxgSoftBodyUtil::repackSimTetraRestPosesAndMaterials(PxgMat33Block* blockRestPosesOut, PxU16* orderedMatOut, PxU16* matOut,
+	const Gu::TetrahedronMesh* simTetMesh, const Gu::DeformableVolumeAuxData* softBodyAuxData, const PxU16* materialsHandles)
+{
+	const PxU32 numTetsGM = simTetMesh->getNbTetrahedronsFast();
+	copyTetraRestPoses(orderedMatOut, matOut, blockRestPosesOut,
+		softBodyAuxData->mGridModelTetraRestPoses, softBodyAuxData->mGridModelOrderedTetrahedrons, simTetMesh->mMaterialIndices,
+		numTetsGM, softBodyAuxData->mNumTetsPerElement, materialsHandles);
+}
+
 /*static void copyTetRemaps(uint4* dstRemaps, PxU32* srcRemaps, PxU32 numTets)
 {
 	for (PxU32 i = 0; i < numTets; ++i)
