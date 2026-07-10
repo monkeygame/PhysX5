@@ -150,6 +150,21 @@ public:
 	static void updateRestShape(PxDeformableVolume& deformableVolume, const PxVec3* newRestVerticesLocal, PxU32 numVertices, const PxU16* newPerTetMaterialIndices, PxU32 numTets);
 
 	/**
+	\brief GM-PathB: Retag per-tetrahedron materials without rebaking elastic rest (Qinv unchanged).
+
+	Updates only the simulation mesh's per-tet material indices and flags eSIM_REST_POSE so the GPU
+	controller re-uploads material tables on the next simulate(). Does not modify rest vertex positions
+	or recompute Qinv — use for in-place electro-hardening that must not alter the elastic shape.
+
+	\param[in] deformableVolume Target volume (topology unchanged)
+	\param[in] newPerTetMaterialIndices Per-tet local material indices; PX_DEFORMABLE_VOLUME_KEEP_MATERIAL preserves existing entry
+	\param[in] numTets Must equal simulation mesh tetrahedron count
+
+	\see updateRestShape PxDeformableVolumeDataFlag::eSIM_REST_POSE
+	*/
+	static void updatePerTetMaterials(PxDeformableVolume& deformableVolume, const PxU16* newPerTetMaterialIndices, PxU32 numTets);
+
+	/**
 	\brief Updates the collision mesh's vertex positions to match the simulation mesh's transformation and scale.
 	
 	The buffer affected by this operation can be obtained from the deformable volume using the method getPositionInvMassBufferD()

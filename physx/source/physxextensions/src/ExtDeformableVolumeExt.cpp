@@ -287,6 +287,52 @@ static void gmRecomputeTetRestPoses(const PxTetrahedronMesh& mesh, const PxVec3*
 	}
 }
 
+static void gmAssignPerTetMaterialIndices(PxTetrahedronMesh* simMesh, const PxU16* newPerTetMaterialIndices, PxU32 numTets)
+{
+	if (simMesh == NULL || newPerTetMaterialIndices == NULL)
+		return;
+
+	const PxU32 nbSimTets = simMesh->getNbTetrahedrons();
+	if (numTets != nbSimTets)
+		return;
+
+	Gu::TetrahedronMesh* simMeshGu = static_cast<Gu::TetrahedronMesh*>(simMesh);
+	PxU16* simMaterials = simMeshGu->mMaterialIndices;
+	if (simMaterials == NULL)
+	{
+		simMaterials = reinterpret_cast<PxU16*>(PX_ALLOC(sizeof(PxU16) * nbSimTets, "GM-PathB mMaterialIndices"));
+		simMeshGu->mMaterialIndices = simMaterials;
+		if (simMaterials != NULL)
+		{
+			for (PxU32 i = 0; i < nbSimTets; ++i)
+				simMaterials[i] = 0;
+		}
+	}
+	if (simMaterials != NULL)
+	{
+		for (PxU32 i = 0; i < nbSimTets; ++i)
+		{
+			if (newPerTetMaterialIndices[i] != PX_DEFORMABLE_VOLUME_KEEP_MATERIAL)
+				simMaterials[i] = newPerTetMaterialIndices[i];
+		}
+	}
+}
+
+void PxDeformableVolumeExt::updatePerTetMaterials(PxDeformableVolume& deformableVolume, const PxU16* newPerTetMaterialIndices, PxU32 numTets)
+{
+	PxTetrahedronMesh* simMesh = deformableVolume.getSimulationMesh();
+	if (simMesh == NULL || newPerTetMaterialIndices == NULL || numTets == 0)
+		return;
+
+	gmAssignPerTetMaterialIndices(simMesh, newPerTetMaterialIndices, numTets);
+	deformableVolume.markDirty(PxDeformableVolumeDataFlag::eSIM_REST_POSE);
+
+	const PxU32 gpuIndex = deformableVolume.getGpuDeformableVolumeIndex();
+	PxGetFoundation().error(PxErrorCode::eDEBUG_INFO, PX_FL,
+		"[GM-PathB][updatePerTetMaterials] gpuIndex=%u nbSimTets=%u matChange=1 markDirty(eSIM_REST_POSE)",
+		gpuIndex, simMesh->getNbTetrahedrons());
+}
+
 void PxDeformableVolumeExt::updateRestShape(PxDeformableVolume& deformableVolume, const PxVec3* newRestVerticesLocal, PxU32 numVertices, const PxU16* newPerTetMaterialIndices, PxU32 numTets)
 {
 	PxTetrahedronMesh* simMesh = deformableVolume.getSimulationMesh();
@@ -307,40 +353,8 @@ void PxDeformableVolumeExt::updateRestShape(PxDeformableVolume& deformableVolume
 	// the GPU controller re-packs it into the partitioned/blocked layout on the eSIM_REST_POSE dirty flag.
 	gmRecomputeTetRestPoses(*simMesh, newRestVerticesLocal, numVertices, auxData->getGridModelRestPosesFast(), nbSimTets);
 
-	// Optionally re-assign per-tetrahedron local material indices (index into the shape's material table).
-	// copyTetraRestPoses() on the GPU side reads the simulation mesh's per-tet material indices.
 	if (newPerTetMaterialIndices != NULL && numTets == nbSimTets)
-	{
-		// getMaterials()/mMaterialIndices live on the internal Gu::TetrahedronMesh, not the public PxTetrahedronMesh.
-		Gu::TetrahedronMesh* simMeshGu = static_cast<Gu::TetrahedronMesh*>(simMesh);
-		PxU16* simMaterials = simMeshGu->mMaterialIndices;
-		if (simMaterials == NULL)
-		{
-			// GM-PathB: the mesh was cooked single-material, so there is no per-tet material array. Lazily
-			// allocate one (freed by ~TetrahedronMesh via PX_FREE(mMaterialIndices)) so hardened tets can
-			// reference a second (stiffer) material after the shape's material table is extended at runtime.
-			// Initialise every tet to the base material index (0); the non-sentinel entries below then retag
-			// only the hardened tets, leaving the rest on the base material.
-			simMaterials = reinterpret_cast<PxU16*>(PX_ALLOC(sizeof(PxU16) * nbSimTets, "GM-PathB mMaterialIndices"));
-			simMeshGu->mMaterialIndices = simMaterials;
-			if (simMaterials != NULL)
-			{
-				for (PxU32 i = 0; i < nbSimTets; ++i)
-					simMaterials[i] = 0;
-			}
-		}
-		if (simMaterials != NULL)
-		{
-			// Only overwrite entries the caller explicitly set; PX_DEFORMABLE_VOLUME_KEEP_MATERIAL preserves the
-			// tet's original local material index (so an originally multi-material volume is not clobbered when
-			// only a subset of tets is being hardened).
-			for (PxU32 i = 0; i < nbSimTets; ++i)
-			{
-				if (newPerTetMaterialIndices[i] != PX_DEFORMABLE_VOLUME_KEEP_MATERIAL)
-					simMaterials[i] = newPerTetMaterialIndices[i];
-			}
-		}
-	}
+		gmAssignPerTetMaterialIndices(simMesh, newPerTetMaterialIndices, numTets);
 
 	deformableVolume.markDirty(PxDeformableVolumeDataFlag::eSIM_REST_POSE);
 
