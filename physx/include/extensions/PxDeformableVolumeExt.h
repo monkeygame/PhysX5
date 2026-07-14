@@ -165,6 +165,23 @@ public:
 	static void updatePerTetMaterials(PxDeformableVolume& deformableVolume, const PxU16* newPerTetMaterialIndices, PxU32 numTets);
 
 	/**
+	\brief GM-PathB: Write per-tet material indices onto the simulation mesh without markDirty.
+
+	Use at actor create time (before the volume is added to a scene / before GPU soft-body buffers
+	are built) so the initial GPU upload already carries the correct multi-material assignment.
+	Does NOT set eSIM_REST_POSE — avoids a deferred PathB REBAKE after the first few playframes.
+
+	For runtime retag (Harden / ApplyPerTetMaterials) use updatePerTetMaterials instead.
+
+	\param[in] deformableVolume Target volume (must have a simulation mesh)
+	\param[in] newPerTetMaterialIndices Per-tet local material indices; PX_DEFORMABLE_VOLUME_KEEP_MATERIAL preserves existing entry
+	\param[in] numTets Must equal simulation mesh tetrahedron count
+
+	\see updatePerTetMaterials
+	*/
+	static void assignPerTetMaterials(PxDeformableVolume& deformableVolume, const PxU16* newPerTetMaterialIndices, PxU32 numTets);
+
+	/**
 	\brief Updates the collision mesh's vertex positions to match the simulation mesh's transformation and scale.
 	
 	The buffer affected by this operation can be obtained from the deformable volume using the method getPositionInvMassBufferD()

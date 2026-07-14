@@ -318,6 +318,15 @@ static void gmAssignPerTetMaterialIndices(PxTetrahedronMesh* simMesh, const PxU1
 	}
 }
 
+void PxDeformableVolumeExt::assignPerTetMaterials(PxDeformableVolume& deformableVolume, const PxU16* newPerTetMaterialIndices, PxU32 numTets)
+{
+	PxTetrahedronMesh* simMesh = deformableVolume.getSimulationMesh();
+	if (simMesh == NULL || newPerTetMaterialIndices == NULL || numTets == 0)
+		return;
+
+	gmAssignPerTetMaterialIndices(simMesh, newPerTetMaterialIndices, numTets);
+}
+
 void PxDeformableVolumeExt::updatePerTetMaterials(PxDeformableVolume& deformableVolume, const PxU16* newPerTetMaterialIndices, PxU32 numTets)
 {
 	PxTetrahedronMesh* simMesh = deformableVolume.getSimulationMesh();
@@ -326,11 +335,6 @@ void PxDeformableVolumeExt::updatePerTetMaterials(PxDeformableVolume& deformable
 
 	gmAssignPerTetMaterialIndices(simMesh, newPerTetMaterialIndices, numTets);
 	deformableVolume.markDirty(PxDeformableVolumeDataFlag::eSIM_REST_POSE);
-
-	const PxU32 gpuIndex = deformableVolume.getGpuDeformableVolumeIndex();
-	PxGetFoundation().error(PxErrorCode::eDEBUG_INFO, PX_FL,
-		"[GM-PathB][updatePerTetMaterials] gpuIndex=%u nbSimTets=%u matChange=1 markDirty(eSIM_REST_POSE)",
-		gpuIndex, simMesh->getNbTetrahedrons());
 }
 
 void PxDeformableVolumeExt::updateRestShape(PxDeformableVolume& deformableVolume, const PxVec3* newRestVerticesLocal, PxU32 numVertices, const PxU16* newPerTetMaterialIndices, PxU32 numTets)
@@ -357,19 +361,6 @@ void PxDeformableVolumeExt::updateRestShape(PxDeformableVolume& deformableVolume
 		gmAssignPerTetMaterialIndices(simMesh, newPerTetMaterialIndices, numTets);
 
 	deformableVolume.markDirty(PxDeformableVolumeDataFlag::eSIM_REST_POSE);
-
-	// GM-PathB DIAGNOSTIC: confirm CPU-side rebake + dirty flag, and expose the volume's GPU remap index so it
-	// can be correlated with the GPU-side updateUserData logs. Remove once the pipeline is validated.
-	{
-		const PxMat33* qinv = auxData->getGridModelRestPosesFast();
-		const PxU32 gpuIndex = deformableVolume.getGpuDeformableVolumeIndex();
-		PxGetFoundation().error(PxErrorCode::eDEBUG_INFO, PX_FL,
-			"[GM-PathB][updateRestShape] gpuIndex=%u nbSimVerts=%u nbSimTets=%u newRest0=(%.4f,%.4f,%.4f) Qinv0.c0=(%.5f,%.5f,%.5f) matChange=%d markDirty(eSIM_REST_POSE)",
-			gpuIndex, nbSimVerts, nbSimTets,
-			newRestVerticesLocal[0].x, newRestVerticesLocal[0].y, newRestVerticesLocal[0].z,
-			qinv[0].column0.x, qinv[0].column0.y, qinv[0].column0.z,
-			(newPerTetMaterialIndices != NULL) ? 1 : 0);
-	}
 }
 
 void PxDeformableVolumeExt::updateEmbeddedCollisionMesh(PxDeformableVolume& deformableVolume, PxVec4* simPositionsPinned, PxVec4* collPositionsPinned)

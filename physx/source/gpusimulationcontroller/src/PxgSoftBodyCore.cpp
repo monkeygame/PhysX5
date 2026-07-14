@@ -3074,18 +3074,6 @@ namespace physx
 	bool PxgSoftBodyCore::updateUserData(PxPinnedArray<PxgSoftBody>& softBodyPool, PxArray<PxU32>& softBodyNodeIndexPool,
 		const PxU32* activeSoftBodies, const PxU32 nbActiveSoftBodies, void** bodySimsLL)
 	{
-		// GM-PathB DIAGNOSTIC: throttled dump. Remove after validation.
-		static PxU32 s_gmDumpCounter = 0;
-		const bool gmDbgDump = ((s_gmDumpCounter++ % 120u) == 0u);
-		if (gmDbgDump)
-		{
-			const PxU32 r0 = nbActiveSoftBodies > 0 ? softBodyPool[activeSoftBodies[0]].mGpuRemapIndex : 0xffffffffu;
-			const PxU32 r1 = nbActiveSoftBodies > 1 ? softBodyPool[activeSoftBodies[1]].mGpuRemapIndex : 0xffffffffu;
-			const PxU32 r2 = nbActiveSoftBodies > 2 ? softBodyPool[activeSoftBodies[2]].mGpuRemapIndex : 0xffffffffu;
-			PxGetFoundation().error(PxErrorCode::eDEBUG_INFO, PX_FL,
-				"[GM-PathB][updateUserData] nbActive=%u activeRemap0..2=[%u %u %u]", nbActiveSoftBodies, r0, r1, r2);
-		}
-
 		bool anyDirty = false;
 		for (PxU32 i = 0; i < nbActiveSoftBodies; ++i)
 		{
@@ -3093,31 +3081,6 @@ namespace physx
 			PxU32 nodeIndex = softBodyNodeIndexPool[softBody.mGpuRemapIndex];
 			Dy::DeformableVolume* dySoftBody = reinterpret_cast<Dy::DeformableVolume*>(bodySimsLL[nodeIndex]);
 			Dy::DeformableVolumeCore& dyDeformableVolumeCore = dySoftBody->getCore();
-
-			// GM-PathB DIAGNOSTIC: read back the CURRENT device state for this body every ~120 calls: the first
-			// simulation-tet rest pose (Qinv) block AND simulation vertex 0's world position. This tells us whether
-			// (a) our rebaked Qinv persists on the device (vs being overwritten back to the original), and
-			// (b) the body physically holds the baked shape (vs the FEM solve dragging the vertices back). Remove after validation.
-			if (gmDbgDump && softBody.mSimTetraRestPoses != NULL && dyDeformableVolumeCore.simPositionInvMass != NULL)
-			{
-				PxgMat33Block hostBlock;
-				PxVec4 hostPos0;
-				mCudaContext->memcpyDtoH(&hostBlock, reinterpret_cast<CUdeviceptr>(softBody.mSimTetraRestPoses), sizeof(PxgMat33Block));
-				mCudaContext->memcpyDtoH(&hostPos0, reinterpret_cast<CUdeviceptr>(dyDeformableVolumeCore.simPositionInvMass), sizeof(PxVec4));
-				PxGetFoundation().error(PxErrorCode::eDEBUG_INFO, PX_FL,
-					"[GM-PathB][updateUserData] STATE remap=%u deviceQinv0.c0.x=%.5f simPos0=(%.4f,%.4f,%.4f)",
-					softBody.mGpuRemapIndex, hostBlock.mCol0[0].x, hostPos0.x, hostPos0.y, hostPos0.z);
-			}
-
-			// GM-PathB DIAGNOSTIC: log any active body that currently carries a dirty flag (fires only right
-			// after markDirty, so it is not noisy). Reveals whether the eSIM_REST_POSE bit reaches this loop.
-			if (dyDeformableVolumeCore.dirtyFlags)
-			{
-				const int hasRestBit = (dyDeformableVolumeCore.dirtyFlags & PxDeformableVolumeDataFlag::eSIM_REST_POSE) ? 1 : 0;
-				PxGetFoundation().error(PxErrorCode::eDEBUG_INFO, PX_FL,
-					"[GM-PathB][updateUserData] active body remap=%u hasDirtyFlags=1 eSIM_REST_POSE=%d",
-					softBody.mGpuRemapIndex, hasRestBit);
-			}
 
 			if (dyDeformableVolumeCore.dirty)
 			{
@@ -3164,14 +3127,6 @@ namespace physx
 					{
 						PxgSoftBodyUtil::repackSimTetraRestPosesAndMaterials(stagingGM, stagingOrderedMat, stagingMat,
 							simTetMesh, auxData, dyDeformableVolumeCore.materialHandles.begin());
-
-						// GM-PathB DIAGNOSTIC: confirm the rebake branch executes for this body, and that the
-						// re-packed blocked Qinv is non-degenerate. Remove after validation.
-						PxGetFoundation().error(PxErrorCode::eDEBUG_INFO, PX_FL,
-							"[GM-PathB][updateUserData] REBAKE remap=%u numTetsGM=%u numBlocks=%u matHandles=%u stagedQinv0.c0.x=%.5f simTetRestPosesPtr=%p",
-							softBody.mGpuRemapIndex, numTetsGM, numBlocks,
-							(unsigned)dyDeformableVolumeCore.materialHandles.size(),
-							stagingGM[0].mCol0[0].x, (void*)softBody.mSimTetraRestPoses);
 
 						mCudaContext->memcpyHtoDAsync(reinterpret_cast<CUdeviceptr>(softBody.mSimTetraRestPoses), stagingGM, sizeof(PxgMat33Block) * numBlocks, mStream);
 						// Reset the plastic-deformation reference snapshot (mOrigQinv) to the new rest as well.
