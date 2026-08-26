@@ -3345,10 +3345,10 @@ namespace physx
 					const PxU32 numTetsGM = simTetMesh->getNbTetrahedronsFast();
 					const PxU32 numBlocks = (numTetsGM + 31) / 32;
 
-					PxsHeapMemoryAllocator* mappedAlloc = mHeapMemoryManager->mMappedMemoryAllocators;
-					PxgMat33Block* stagingGM = reinterpret_cast<PxgMat33Block*>(mappedAlloc->allocate(sizeof(PxgMat33Block) * numBlocks, PxsHeapStats::eSIMULATION_SOFTBODY, PX_FL));
-					PxU16* stagingOrderedMat = reinterpret_cast<PxU16*>(mappedAlloc->allocate(sizeof(PxU16) * numTetsGM, PxsHeapStats::eSIMULATION_SOFTBODY, PX_FL));
-					PxU16* stagingMat = reinterpret_cast<PxU16*>(mappedAlloc->allocate(sizeof(PxU16) * numTetsGM, PxsHeapStats::eSIMULATION_SOFTBODY, PX_FL));
+					Cm::VirtualAllocatorCallback& mappedAlloc = mAllocDesc.hostMappedAlloc;
+					PxgMat33Block* stagingGM = reinterpret_cast<PxgMat33Block*>(mappedAlloc.allocate(sizeof(PxgMat33Block) * numBlocks, PxsHeapStats::eSIMULATION_SOFTBODY, PX_FL));
+					PxU16* stagingOrderedMat = reinterpret_cast<PxU16*>(mappedAlloc.allocate(sizeof(PxU16) * numTetsGM, PxsHeapStats::eSIMULATION_SOFTBODY, PX_FL));
+					PxU16* stagingMat = reinterpret_cast<PxU16*>(mappedAlloc.allocate(sizeof(PxU16) * numTetsGM, PxsHeapStats::eSIMULATION_SOFTBODY, PX_FL));
 
 					if (stagingGM != NULL && stagingOrderedMat != NULL && stagingMat != NULL)
 					{
@@ -3366,9 +3366,9 @@ namespace physx
 						mCudaContext->streamSynchronize(mStream);
 					}
 
-					if (stagingGM != NULL) mappedAlloc->deallocate(stagingGM);
-					if (stagingOrderedMat != NULL) mappedAlloc->deallocate(stagingOrderedMat);
-					if (stagingMat != NULL) mappedAlloc->deallocate(stagingMat);
+					if (stagingGM != NULL) mappedAlloc.deallocate(stagingGM);
+					if (stagingOrderedMat != NULL) mappedAlloc.deallocate(stagingOrderedMat);
+					if (stagingMat != NULL) mappedAlloc.deallocate(stagingMat);
 
 					anyDirty = true;
 				}
