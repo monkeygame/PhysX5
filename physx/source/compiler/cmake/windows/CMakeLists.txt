@@ -248,24 +248,22 @@ IF(PX_GENERATE_STATIC_LIBRARIES)
 	STRING(APPEND HEADER_CONTENT "#define PX_PHYSX_STATIC_LIB\n")
 ENDIF()
 
-	# Source-distro fallback for non-GPU Windows presets (e.g. windows-crosscompile,
-	# used by --distro_name=public on Linux hosts). When PX_GENERATE_GPU_PROJECTS
-	# is OFF, cmakegpu/ is never add_subdirectory'd, so its source_distro_list.txt is
-	# never written and the Windows GPU resource files (PhysXGpu.rc + resource.h)
-	# fall through. Enumerate them here so the public source distro is identical
-	# regardless of host OS. Pulls in the manifest used by the GPU build path
-	# (cmakegpu/windows/PhysXGpu.cmake) so there is a single source of truth. No
-	# CUDA toolchain is required because we only set file paths.
-	IF(PX_GENERATE_SOURCE_DISTRO AND NOT PX_GENERATE_GPU_PROJECTS AND NOT PX_GENERATE_GPU_PROJECTS_ONLY)
-		IF(NOT DEFINED PHYSX_SOURCE_DIR)
-			SET(PHYSX_SOURCE_DIR ${PHYSX_ROOT_DIR}/source)
-		ENDIF()
-		INCLUDE(${PHYSX_ROOT_DIR}/source/compiler/cmakegpu/windows/PhysXGpuPlatformFiles.cmake)
-		LIST(APPEND SOURCE_DISTRO_FILE_LIST ${PHYSXGPU_RESOURCE})
-	ENDIF()
+IF(PX_GENERATE_GPU_STATIC_LIBRARIES)
+	STRING(APPEND HEADER_CONTENT "#define PX_PHYSX_GPU_STATIC\n")
+ENDIF()
 
-	IF(PX_GENERATE_GPU_STATIC_LIBRARIES)
-		STRING(APPEND HEADER_CONTENT "#define PX_PHYSX_GPU_STATIC\n")
+# Source-distro fallback for non-GPU Windows presets (e.g. windows-crosscompile,
+# used by --distro_name=public on Linux hosts). When PX_GENERATE_GPU_PROJECTS
+# is OFF, cmakegpu/ is never add_subdirectory'd, so its source_distro_list.txt is
+# never written and the Windows GPU resource files (PhysXGpu.rc + resource.h)
+# fall through. Enumerate them here so the public source distro is identical
+# regardless of host OS. Pulls in the manifest used by the GPU build path
+# (cmakegpu/windows/PhysXGpu.cmake) so there is a single source of truth. No
+# CUDA toolchain is required because we only set file paths.
+IF(PX_GENERATE_SOURCE_DISTRO AND NOT PX_GENERATE_GPU_PROJECTS AND NOT PX_GENERATE_GPU_PROJECTS_ONLY)
+	IF(NOT DEFINED PHYSX_SOURCE_DIR)
+		SET(PHYSX_SOURCE_DIR ${PHYSX_ROOT_DIR}/source)
 	ENDIF()
-
+	INCLUDE(${PHYSX_ROOT_DIR}/source/compiler/cmakegpu/windows/PhysXGpuPlatformFiles.cmake)
+	LIST(APPEND SOURCE_DISTRO_FILE_LIST ${PHYSXGPU_RESOURCE})
 ENDIF()
