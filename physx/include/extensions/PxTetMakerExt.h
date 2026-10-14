@@ -80,7 +80,8 @@ public:
 	\return True if success
 	*/
 	static bool createVoxelTetrahedronMesh(const PxTetrahedronMeshDesc& tetMesh, const PxU32 numVoxelsAlongLongestBoundingBoxAxis,
-		physx::PxArray<physx::PxVec3>& outVertices, physx::PxArray<physx::PxU32>& outTetIndices, PxI32* inputPointToOutputTetIndex = NULL, const PxU32* anchorNodeIndices = NULL, PxU32 numTetsPerVoxel = 5);
+		physx::PxArray<physx::PxVec3>& outVertices, physx::PxArray<physx::PxU32>& outTetIndices, PxI32* inputPointToOutputTetIndex = NULL, const PxU32* anchorNodeIndices = NULL, PxU32 numTetsPerVoxel = 5,
+		bool mergeFragments = true, bool deleteSmallFragments = false);
 
 	/**
 	\brief Create voxel-based tetrahedron mesh using TetMaker

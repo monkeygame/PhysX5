@@ -264,12 +264,14 @@ bool PxTetMaker::createConformingTetrahedronMesh(const PxSimpleTriangleMesh& tri
 
 bool PxTetMaker::createVoxelTetrahedronMesh(const PxTetrahedronMeshDesc& tetMesh,
 	const PxU32 numVoxelsAlongLongestBoundingBoxAxis, physx::PxArray<physx::PxVec3>& outVertices, physx::PxArray<physx::PxU32>& outTetIndices,
-	PxI32* intputPointToOutputTetIndex, const PxU32* anchorNodeIndices, PxU32 numTetsPerVoxel)
+	PxI32* intputPointToOutputTetIndex, const PxU32* anchorNodeIndices, PxU32 numTetsPerVoxel,
+	bool mergeFragments, bool deleteSmallFragments)
 {
 	//numTetsPerVoxel has only two valid values.
 	if (numTetsPerVoxel != 5 && numTetsPerVoxel != 6)
 		numTetsPerVoxel = 5;
-	Ext::generateVoxelTetmesh(tetMesh.points, tetMesh.tetrahedrons,	numVoxelsAlongLongestBoundingBoxAxis, outVertices, outTetIndices, intputPointToOutputTetIndex, anchorNodeIndices, numTetsPerVoxel);
+	Ext::generateVoxelTetmesh(tetMesh.points, tetMesh.tetrahedrons,	numVoxelsAlongLongestBoundingBoxAxis, outVertices, outTetIndices, intputPointToOutputTetIndex, anchorNodeIndices, numTetsPerVoxel,
+		false, mergeFragments, deleteSmallFragments);
 	return true;
 }
 

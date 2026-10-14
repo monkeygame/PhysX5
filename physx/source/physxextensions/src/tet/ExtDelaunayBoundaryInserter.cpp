@@ -44,6 +44,7 @@
 #include "common/GuMeshAnalysis.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #define PI 3.141592653589793238462643383
 
@@ -1776,22 +1777,37 @@ static PX_FORCE_INLINE void connect(const VoxelNodes& voxelNodesA, const PxI32* 
 		uf.makeSet(voxelNodesA.c[faceVoxelA[i]], voxelNodesB.c[faceVoxelB[i]]);
 }
 
-static PX_FORCE_INLINE bool intersectionOfSortedListsNotEmpty(const PxArray<PxI32>& sorted1, const PxArray<PxI32>& sorted2)
+static PX_FORCE_INLINE PxU32 intersectionCountOfSortedLists(const PxArray<PxI32>& sorted1, const PxArray<PxI32>& sorted2)
 {
 	PxU32 a = 0;
 	PxU32 b = 0;
+	PxU32 count = 0;
 	while (a < sorted1.size() && b < sorted2.size())
 	{
 		if (sorted1[a] == sorted2[b])
-			return true;
+		{
+			++count;
+			++a;
+			++b;
+		}
 		else if (sorted1[a] > sorted2[b])
 			++b;
 		else
 			++a;
 	}
-	return false;
+	return count;
 }
 
+static bool voxelPrecedes(const Vox& a, const Vox& b)
+{
+	if (a.mLocationX != b.mLocationX)
+		return a.mLocationX < b.mLocationX;
+	if (a.mLocationY != b.mLocationY)
+		return a.mLocationY < b.mLocationY;
+	return a.mLocationZ < b.mLocationZ;
+}
+
+// 每张体素面只焊接共享碰撞四面体最多的一对 cluster。两侧都会调用本函数，用体素坐标把配对方向固定住。
 static void connect(const Vox& voxelA, const PxI32* faceVoxelA, const Vox& voxelB, const PxI32* faceVoxelB, UnionFind& uf, bool avoidVoxelDuplication = false)
 {
 	if (avoidVoxelDuplication)
@@ -1800,16 +1816,37 @@ static void connect(const Vox& voxelA, const PxI32* faceVoxelA, const Vox& voxel
 		return;
 	}
 
+	const bool aIsLower = voxelPrecedes(voxelA, voxelB);
+	PxI32 bestLower = -1;
+	PxI32 bestUpper = -1;
+	PxU32 bestScore = 0;
 	for (PxU32 i = 0; i < voxelA.mClusters.size(); ++i)
 	{
 		const PxArray<PxI32>& clusterA = voxelA.mClusters[i];
 		for (PxU32 j = 0; j < voxelB.mClusters.size(); ++j)
 		{
-			const PxArray<PxI32>& clusterB = voxelB.mClusters[j];
-			if (intersectionOfSortedListsNotEmpty(clusterA, clusterB))
-				connect(voxelA.mNodes[i], faceVoxelA, voxelB.mNodes[j], faceVoxelB, uf);
+			const PxU32 score = intersectionCountOfSortedLists(clusterA, voxelB.mClusters[j]);
+			if (score == 0)
+				continue;
+			const PxI32 lower = aIsLower ? PxI32(i) : PxI32(j);
+			const PxI32 upper = aIsLower ? PxI32(j) : PxI32(i);
+			const bool better = bestLower < 0
+				|| score > bestScore
+				|| (score == bestScore && (lower < bestLower || (lower == bestLower && upper < bestUpper)));
+			if (!better)
+				continue;
+			bestScore = score;
+			bestLower = lower;
+			bestUpper = upper;
 		}
 	}
+
+	if (bestLower < 0)
+		return;
+
+	const PxU32 clusterA = aIsLower ? PxU32(bestLower) : PxU32(bestUpper);
+	const PxU32 clusterB = aIsLower ? PxU32(bestUpper) : PxU32(bestLower);
+	connect(voxelA.mNodes[clusterA], faceVoxelA, voxelB.mNodes[clusterB], faceVoxelB, uf);
 }
 
 static PX_FORCE_INLINE PxU32 cell(PxU32 x, PxU32 y, PxU32 z, PxU32 numX, PxU32 numXtimesNumY)
@@ -1921,9 +1958,695 @@ static PxI32 getVoxelId(PxArray<PxI32> voxelIds, const PxVec3& p, const PxVec3& 
 	return result;
 }
 
+static PxU64 sortedTetFaceKey(PxU32 a, PxU32 b, PxU32 c)
+{
+	if (a > b) { const PxU32 t = a; a = b; b = t; }
+	if (b > c) { const PxU32 t = b; b = c; c = t; }
+	if (a > b) { const PxU32 t = a; a = b; b = t; }
+	return (PxU64(a) << 42) | (PxU64(b) << 21) | PxU64(c);
+}
+
+static void tetFaceVertices(const PxU32* tet, PxU32 face, PxU32& a, PxU32& b, PxU32& c)
+{
+	const PxU32 i0 = face == 3 ? 1 : 0;
+	const PxU32 i1 = face == 0 ? 1 : face == 1 ? 1 : 2;
+	const PxU32 i2 = face == 2 ? 3 : face == 3 ? 3 : face == 0 ? 2 : 3;
+	a = tet[i0];
+	b = tet[i1];
+	c = tet[i2];
+}
+
+static PxU32 floatBits(PxReal value)
+{
+	PxU32 bits = 0;
+	memcpy(&bits, &value, sizeof(bits));
+	return bits;
+}
+
+static PxU64 hashPos(const PxVec3& p)
+{
+	return PxU64(floatBits(p.x)) * 73856093ull
+		^ PxU64(floatBits(p.y)) * 19349663ull
+		^ PxU64(floatBits(p.z)) * 83492791ull;
+}
+
+static bool posLess(const PxVec3& a, const PxVec3& b)
+{
+	if (a.x != b.x) return a.x < b.x;
+	if (a.y != b.y) return a.y < b.y;
+	return a.z < b.z;
+}
+
+static void sortPos(PxVec3& a, PxVec3& b, PxVec3& c)
+{
+	if (posLess(b, a)) { const PxVec3 t = a; a = b; b = t; }
+	if (posLess(c, b)) { const PxVec3 t = b; b = c; c = t; }
+	if (posLess(b, a)) { const PxVec3 t = a; a = b; b = t; }
+}
+
+static bool samePos(const PxVec3& a, const PxVec3& b)
+{
+	return a.x == b.x && a.y == b.y && a.z == b.z;
+}
+
+static PxU64 hashSortedTri(PxVec3 a, PxVec3 b, PxVec3 c)
+{
+	sortPos(a, b, c);
+	return hashPos(a) * 16777619ull ^ hashPos(b) * 2166136261ull ^ hashPos(c);
+}
+
+// 把位置重合、且焊上后不会出现 ≥3 共享的边界面拼回去，让拆开的碎片回到主体。
+static PxU32 stitchCoincidentComponents(PxArray<PxVec3>& points, PxArray<PxU32>& indices)
+{
+	const PxU32 numTets = indices.size() / 4;
+	if (numTets == 0)
+		return 0;
+
+	PxU32 stitched = 0;
+	for (PxU32 pass = 0; pass < 16; ++pass)
+	{
+		PxArray<PxI32> parent(numTets, 0);
+		PxArray<PxU32> rank(numTets, 0);
+		for (PxU32 i = 0; i < numTets; ++i)
+			parent[i] = PxI32(i);
+
+		auto findRoot = [&](PxI32 x) -> PxI32
+		{
+			PxI32 root = x;
+			while (parent[PxU32(root)] != root)
+				root = parent[PxU32(root)];
+			while (parent[PxU32(x)] != root)
+			{
+				const PxI32 next = parent[PxU32(x)];
+				parent[PxU32(x)] = root;
+				x = next;
+			}
+			return root;
+		};
+		auto unite = [&](PxI32 a, PxI32 b)
+		{
+			a = findRoot(a);
+			b = findRoot(b);
+			if (a == b)
+				return;
+			if (rank[PxU32(a)] < rank[PxU32(b)])
+				parent[PxU32(a)] = b;
+			else if (rank[PxU32(a)] > rank[PxU32(b)])
+				parent[PxU32(b)] = a;
+			else
+			{
+				parent[PxU32(b)] = a;
+				rank[PxU32(a)]++;
+			}
+		};
+
+		PxHashMap<PxU64, PxI32> faceCount;
+		struct FaceUse
+		{
+			PxU64 key;
+			PxU32 tet;
+			PxU32 v0, v1, v2;
+			PxU32 count;
+		};
+		PxArray<FaceUse> uses;
+
+		for (PxU32 tet = 0; tet < numTets; ++tet)
+		{
+			const PxU32* verts = &indices[tet * 4];
+			for (PxU32 f = 0; f < 4; ++f)
+			{
+				PxU32 a, b, c;
+				tetFaceVertices(verts, f, a, b, c);
+				if (a == b || b == c || a == c)
+					continue;
+				if (a >= points.size() || b >= points.size() || c >= points.size())
+					continue;
+				const PxU64 key = sortedTetFaceKey(a, b, c);
+				const PxPair<const PxU64, PxI32>* found = faceCount.find(key);
+				if (!found)
+					faceCount.insert(key, 1);
+				else
+				{
+					const PxI32 next = found->second + 1;
+					faceCount.erase(key);
+					faceCount.insert(key, next);
+				}
+
+				FaceUse use;
+				use.key = key;
+				use.tet = tet;
+				use.v0 = a;
+				use.v1 = b;
+				use.v2 = c;
+				use.count = 0;
+				uses.pushBack(use);
+			}
+		}
+
+		for (PxU32 i = 0; i < uses.size(); ++i)
+		{
+			const PxPair<const PxU64, PxI32>* found = faceCount.find(uses[i].key);
+			uses[i].count = found ? PxU32(found->second) : 0;
+			if (uses[i].count >= 2 && i > 0)
+			{
+				for (PxI32 j = PxI32(i) - 1; j >= 0; --j)
+				{
+					if (uses[PxU32(j)].key != uses[i].key)
+						continue;
+					unite(PxI32(uses[i].tet), PxI32(uses[PxU32(j)].tet));
+					break;
+				}
+			}
+		}
+
+		PxHashMap<PxU32, PxU32> rootSize;
+		PxU32 mainRoot = 0;
+		PxU32 mainSize = 0;
+		for (PxU32 tet = 0; tet < numTets; ++tet)
+		{
+			const PxU32 root = PxU32(findRoot(PxI32(tet)));
+			const PxPair<const PxU32, PxU32>* found = rootSize.find(root);
+			const PxU32 size = (found ? found->second : 0) + 1;
+			if (found)
+				rootSize.erase(root);
+			rootSize.insert(root, size);
+			if (size > mainSize || (size == mainSize && root < mainRoot))
+			{
+				mainSize = size;
+				mainRoot = root;
+			}
+		}
+		if (mainSize == numTets)
+			break;
+
+		struct Boundary
+		{
+			PxU32 tet;
+			PxU32 v0, v1, v2;
+			PxVec3 p0, p1, p2;
+		};
+		PxArray<Boundary> mainFaces;
+		PxArray<Boundary> otherFaces;
+		PxHashMap<PxU64, PxU32> mainHash;
+
+		for (PxU32 i = 0; i < uses.size(); ++i)
+		{
+			if (uses[i].count != 1)
+				continue;
+			Boundary face;
+			face.tet = uses[i].tet;
+			face.v0 = uses[i].v0;
+			face.v1 = uses[i].v1;
+			face.v2 = uses[i].v2;
+			face.p0 = points[face.v0];
+			face.p1 = points[face.v1];
+			face.p2 = points[face.v2];
+			sortPos(face.p0, face.p1, face.p2);
+			const PxU32 root = PxU32(findRoot(PxI32(face.tet)));
+			if (root == mainRoot)
+			{
+				const PxU64 hash = hashSortedTri(face.p0, face.p1, face.p2);
+				mainHash.insert(hash, mainFaces.size());
+				mainFaces.pushBack(face);
+			}
+			else
+				otherFaces.pushBack(face);
+		}
+
+		bool welded = false;
+		for (PxU32 o = 0; o < otherFaces.size() && !welded; ++o)
+		{
+			const Boundary& src = otherFaces[o];
+			const PxU64 hash = hashSortedTri(src.p0, src.p1, src.p2);
+			const PxPair<const PxU64, PxU32>* slot = mainHash.find(hash);
+			if (!slot)
+				continue;
+
+			const Boundary* dst = NULL;
+			for (PxU32 m = 0; m < mainFaces.size(); ++m)
+			{
+				const Boundary& candidate = mainFaces[m];
+				if (hashSortedTri(candidate.p0, candidate.p1, candidate.p2) != hash)
+					continue;
+				if (samePos(candidate.p0, src.p0) && samePos(candidate.p1, src.p1) && samePos(candidate.p2, src.p2))
+				{
+					dst = &candidate;
+					break;
+				}
+			}
+			if (!dst)
+				continue;
+
+			const PxU32 srcV[3] = { src.v0, src.v1, src.v2 };
+			const PxU32 dstV[3] = { dst->v0, dst->v1, dst->v2 };
+			PxU32 mapFrom[3];
+			PxU32 mapTo[3];
+			PxU32 mapCount = 0;
+			bool match = true;
+			for (PxU32 s = 0; s < 3 && match; ++s)
+			{
+				bool foundVert = false;
+				for (PxU32 d = 0; d < 3; ++d)
+				{
+					if (!samePos(points[srcV[s]], points[dstV[d]]))
+						continue;
+					foundVert = true;
+					bool known = false;
+					for (PxU32 k = 0; k < mapCount; ++k)
+					{
+						if (mapFrom[k] == srcV[s])
+						{
+							known = true;
+							if (mapTo[k] != dstV[d])
+								match = false;
+							break;
+						}
+						if (mapTo[k] == dstV[d] && mapFrom[k] != srcV[s])
+							match = false;
+					}
+					if (!known && match)
+					{
+						mapFrom[mapCount] = srcV[s];
+						mapTo[mapCount] = dstV[d];
+						++mapCount;
+					}
+					break;
+				}
+				if (!foundVert)
+					match = false;
+			}
+			if (!match || mapCount == 0)
+				continue;
+
+			const PxU32 srcRoot = PxU32(findRoot(PxI32(src.tet)));
+			auto mapped = [&](PxU32 v) -> PxU32
+			{
+				for (PxU32 k = 0; k < mapCount; ++k)
+				{
+					if (mapFrom[k] == v)
+						return mapTo[k];
+				}
+				return v;
+			};
+
+			bool safe = true;
+			struct Delta { PxU64 key; PxI32 change; };
+			PxArray<Delta> deltas;
+			for (PxU32 tet = 0; tet < numTets && safe; ++tet)
+			{
+				if (PxU32(findRoot(PxI32(tet))) != srcRoot)
+					continue;
+				const PxU32* verts = &indices[tet * 4];
+				PxU32 rewritten[4];
+				for (PxU32 k = 0; k < 4; ++k)
+					rewritten[k] = mapped(verts[k]);
+				if (rewritten[0] == rewritten[1] || rewritten[0] == rewritten[2] || rewritten[0] == rewritten[3]
+					|| rewritten[1] == rewritten[2] || rewritten[1] == rewritten[3] || rewritten[2] == rewritten[3])
+				{
+					safe = false;
+					break;
+				}
+				for (PxU32 f = 0; f < 4; ++f)
+				{
+					PxU32 a, b, c;
+					tetFaceVertices(verts, f, a, b, c);
+					const PxU64 oldKey = sortedTetFaceKey(a, b, c);
+					const PxU64 newKey = sortedTetFaceKey(mapped(a), mapped(b), mapped(c));
+					if (oldKey == newKey)
+						continue;
+					deltas.pushBack(Delta{ oldKey, -1 });
+					deltas.pushBack(Delta{ newKey, 1 });
+				}
+			}
+			if (!safe)
+				continue;
+
+			for (PxU32 d = 0; d < deltas.size() && safe; ++d)
+			{
+				PxI32 total = 0;
+				const PxPair<const PxU64, PxI32>* found = faceCount.find(deltas[d].key);
+				if (found)
+					total = found->second;
+				for (PxU32 e = 0; e < deltas.size(); ++e)
+				{
+					if (deltas[e].key == deltas[d].key)
+						total += deltas[e].change;
+				}
+				if (total >= 3)
+					safe = false;
+			}
+			if (!safe)
+				continue;
+
+			for (PxU32 tet = 0; tet < numTets; ++tet)
+			{
+				if (PxU32(findRoot(PxI32(tet))) != srcRoot)
+					continue;
+				PxU32* verts = &indices[tet * 4];
+				for (PxU32 k = 0; k < 4; ++k)
+					verts[k] = mapped(verts[k]);
+			}
+			welded = true;
+			++stitched;
+		}
+
+		if (!welded)
+			break;
+	}
+	return stitched;
+}
+
+// 过度共享面（≥3 个 tet）上，保留嵌入最深的两个 tet 的原顶点。
+// 碰到这三个角点的邻接 tet 一起改用副本，避免只剩一个角点的四面体掉成碎片。
+// 之后再把位置重合、且不会重新过度共享的边界面拼回主体。
+static PxU32 deleteSmallFaceComponents(PxArray<PxVec3>& points, PxArray<PxU32>& indices, PxI32* vertexToTet, PxU32 vertexToTetCount)
+{
+	const PxU32 numTets = indices.size() / 4;
+	if (numTets == 0)
+		return 0;
+
+	PxArray<PxI32> parent(numTets, 0);
+	PxArray<PxU32> rank(numTets, 0);
+	for (PxU32 i = 0; i < numTets; ++i)
+		parent[i] = PxI32(i);
+
+	auto findRoot = [&](PxI32 x) -> PxI32
+	{
+		PxI32 root = x;
+		while (parent[PxU32(root)] != root)
+			root = parent[PxU32(root)];
+		while (parent[PxU32(x)] != root)
+		{
+			const PxI32 next = parent[PxU32(x)];
+			parent[PxU32(x)] = root;
+			x = next;
+		}
+		return root;
+	};
+	auto unite = [&](PxI32 a, PxI32 b)
+	{
+		a = findRoot(a);
+		b = findRoot(b);
+		if (a == b)
+			return;
+		if (rank[PxU32(a)] < rank[PxU32(b)])
+			parent[PxU32(a)] = b;
+		else if (rank[PxU32(a)] > rank[PxU32(b)])
+			parent[PxU32(b)] = a;
+		else
+		{
+			parent[PxU32(b)] = a;
+			rank[PxU32(a)]++;
+		}
+	};
+
+	PxHashMap<PxU64, PxU32> firstTet;
+	for (PxU32 tet = 0; tet < numTets; ++tet)
+	{
+		const PxU32* verts = &indices[tet * 4];
+		for (PxU32 f = 0; f < 4; ++f)
+		{
+			PxU32 a, b, c;
+			tetFaceVertices(verts, f, a, b, c);
+			if (a == b || b == c || a == c)
+				continue;
+			const PxU64 key = sortedTetFaceKey(a, b, c);
+			const PxPair<const PxU64, PxU32>* found = firstTet.find(key);
+			if (!found)
+				firstTet.insert(key, tet);
+			else
+				unite(PxI32(tet), PxI32(found->second));
+		}
+	}
+
+	PxHashMap<PxU32, PxU32> rootSize;
+	PxU32 mainRoot = 0;
+	PxU32 mainSize = 0;
+	for (PxU32 tet = 0; tet < numTets; ++tet)
+	{
+		const PxU32 root = PxU32(findRoot(PxI32(tet)));
+		const PxPair<const PxU32, PxU32>* found = rootSize.find(root);
+		const PxU32 size = (found ? found->second : 0) + 1;
+		if (found)
+			rootSize.erase(root);
+		rootSize.insert(root, size);
+		if (size > mainSize)
+		{
+			mainSize = size;
+			mainRoot = root;
+		}
+	}
+	if (mainSize == numTets)
+		return 0;
+
+	PxArray<PxI32> oldToNew(numTets, -1);
+	PxArray<PxU32> kept;
+	kept.reserve(mainSize * 4);
+	PxU32 newTet = 0;
+	for (PxU32 tet = 0; tet < numTets; ++tet)
+	{
+		if (PxU32(findRoot(PxI32(tet))) != mainRoot)
+			continue;
+		oldToNew[tet] = PxI32(newTet++);
+		const PxU32* verts = &indices[tet * 4];
+		kept.pushBack(verts[0]);
+		kept.pushBack(verts[1]);
+		kept.pushBack(verts[2]);
+		kept.pushBack(verts[3]);
+	}
+
+	PxArray<PxI32> vertMap(points.size(), -1);
+	PxArray<PxVec3> newPoints;
+	for (PxU32 i = 0; i < kept.size(); ++i)
+	{
+		const PxU32 v = kept[i];
+		if (v >= points.size())
+			continue;
+		if (vertMap[v] < 0)
+		{
+			vertMap[v] = PxI32(newPoints.size());
+			newPoints.pushBack(points[v]);
+		}
+		kept[i] = PxU32(vertMap[v]);
+	}
+
+	points = newPoints;
+	indices = kept;
+	if (vertexToTet)
+	{
+		for (PxU32 i = 0; i < vertexToTetCount; ++i)
+		{
+			const PxI32 oldTet = vertexToTet[i];
+			if (oldTet >= 0 && PxU32(oldTet) < numTets && oldToNew[PxU32(oldTet)] >= 0)
+				vertexToTet[i] = oldToNew[PxU32(oldTet)];
+			else
+				vertexToTet[i] = 0;
+		}
+	}
+	return numTets - newTet;
+}
+
+static void splitOverSharedTetFaces(PxArray<PxVec3>& points, PxArray<PxU32>& indices, PxI32* vertexToTet, PxU32 vertexToTetCount, bool mergeFragments, bool deleteSmallFragments)
+{
+	const PxU32 numTets = indices.size() / 4;
+	if (numTets == 0 || points.size() == 0)
+		return;
+
+	struct FaceRec
+	{
+		PxU32 v0, v1, v2;
+		PxArray<PxU32> tets;
+	};
+
+	PxHashMap<PxU64, PxU32> faceSlot;
+	PxArray<FaceRec> faces;
+	PxArray<PxI32> neighbor(numTets * 4, -1);
+	PxArray<PxU32> manifoldDegree(numTets, 0);
+
+	for (PxU32 tet = 0; tet < numTets; ++tet)
+	{
+		const PxU32* verts = &indices[tet * 4];
+		for (PxU32 f = 0; f < 4; ++f)
+		{
+			PxU32 a, b, c;
+			tetFaceVertices(verts, f, a, b, c);
+			if (a == b || b == c || a == c)
+				continue;
+			if (a >= points.size() || b >= points.size() || c >= points.size())
+				continue;
+			const PxU64 key = sortedTetFaceKey(a, b, c);
+			const PxPair<const PxU64, PxU32>* found = faceSlot.find(key);
+			PxU32 slot;
+			if (!found)
+			{
+				slot = faces.size();
+				FaceRec rec;
+				rec.v0 = a;
+				rec.v1 = b;
+				rec.v2 = c;
+				if (a > rec.v1) { const PxU32 t = rec.v0; rec.v0 = rec.v1; rec.v1 = t; }
+				if (rec.v1 > rec.v2) { const PxU32 t = rec.v1; rec.v1 = rec.v2; rec.v2 = t; }
+				if (rec.v0 > rec.v1) { const PxU32 t = rec.v0; rec.v0 = rec.v1; rec.v1 = t; }
+				faces.pushBack(rec);
+				faceSlot.insert(key, slot);
+			}
+			else
+				slot = found->second;
+
+			bool seen = false;
+			for (PxU32 i = 0; i < faces[slot].tets.size(); ++i)
+			{
+				if (faces[slot].tets[i] == tet)
+				{
+					seen = true;
+					break;
+				}
+			}
+			if (!seen)
+				faces[slot].tets.pushBack(tet);
+		}
+	}
+
+	for (PxU32 slot = 0; slot < faces.size(); ++slot)
+	{
+		if (faces[slot].tets.size() != 2)
+			continue;
+		const PxU32 t0 = faces[slot].tets[0];
+		const PxU32 t1 = faces[slot].tets[1];
+		const PxU64 key = sortedTetFaceKey(faces[slot].v0, faces[slot].v1, faces[slot].v2);
+		for (PxU32 side = 0; side < 2; ++side)
+		{
+			const PxU32 tet = side == 0 ? t0 : t1;
+			const PxU32 other = side == 0 ? t1 : t0;
+			const PxU32* verts = &indices[tet * 4];
+			for (PxU32 f = 0; f < 4; ++f)
+			{
+				PxU32 a, b, c;
+				tetFaceVertices(verts, f, a, b, c);
+				if (sortedTetFaceKey(a, b, c) != key)
+					continue;
+				neighbor[tet * 4 + f] = PxI32(other);
+				manifoldDegree[tet]++;
+				break;
+			}
+		}
+	}
+
+	struct Op
+	{
+		PxU32 v0, v1, v2;
+		PxArray<PxU32> region;
+	};
+	PxArray<Op> ops;
+
+	for (PxU32 slot = 0; slot < faces.size(); ++slot)
+	{
+		FaceRec& face = faces[slot];
+		if (face.tets.size() < 3)
+			continue;
+
+		PxArray<PxU32> order = face.tets;
+		for (PxU32 i = 1; i < order.size(); ++i)
+		{
+			const PxU32 value = order[i];
+			PxU32 j = i;
+			while (j > 0)
+			{
+				const PxU32 prev = order[j - 1];
+				const bool valueBetter = manifoldDegree[value] > manifoldDegree[prev]
+					|| (manifoldDegree[value] == manifoldDegree[prev] && value < prev);
+				if (!valueBetter)
+					break;
+				order[j] = prev;
+				--j;
+			}
+			order[j] = value;
+		}
+
+		PxArray<PxU8> kept(numTets, 0);
+		kept[order[0]] = 1;
+		kept[order[1]] = 1;
+		PxArray<PxU8> seen(numTets, 0);
+
+		for (PxU32 e = 2; e < order.size(); ++e)
+		{
+			const PxU32 seed = order[e];
+			if (seen[seed])
+				continue;
+
+			Op op;
+			op.v0 = face.v0;
+			op.v1 = face.v1;
+			op.v2 = face.v2;
+			PxArray<PxU32> queue;
+			queue.pushBack(seed);
+			seen[seed] = 1;
+			for (PxU32 q = 0; q < queue.size(); ++q)
+			{
+				const PxU32 tet = queue[q];
+				op.region.pushBack(tet);
+				const PxU32* verts = &indices[tet * 4];
+				for (PxU32 f = 0; f < 4; ++f)
+				{
+					const PxI32 other = neighbor[tet * 4 + f];
+					if (other < 0 || kept[PxU32(other)] || seen[PxU32(other)])
+						continue;
+					PxU32 a, b, c;
+					tetFaceVertices(verts, f, a, b, c);
+					PxU32 shared = 0;
+					const PxU32 corner[3] = { a, b, c };
+					for (PxU32 k = 0; k < 3; ++k)
+					{
+						if (corner[k] == face.v0 || corner[k] == face.v1 || corner[k] == face.v2)
+							++shared;
+					}
+					// 至少碰到被拆开的一个角点才扩出去，避免绕过保留 tet 把整张网格卷进来。
+					// 只共用一个角点的 tet 也要带走，否则它们会掉成不连通的碎片。
+					if (shared == 0)
+						continue;
+					seen[PxU32(other)] = 1;
+					queue.pushBack(PxU32(other));
+				}
+			}
+			if (op.region.size() > 0)
+				ops.pushBack(op);
+		}
+	}
+
+	for (PxU32 i = 0; i < ops.size(); ++i)
+	{
+		const Op& op = ops[i];
+		if (op.v0 >= points.size() || op.v1 >= points.size() || op.v2 >= points.size())
+			continue;
+		const PxU32 n0 = points.size();
+		points.pushBack(points[op.v0]);
+		const PxU32 n1 = points.size();
+		points.pushBack(points[op.v1]);
+		const PxU32 n2 = points.size();
+		points.pushBack(points[op.v2]);
+		for (PxU32 r = 0; r < op.region.size(); ++r)
+		{
+			PxU32* verts = &indices[op.region[r] * 4];
+			for (PxU32 k = 0; k < 4; ++k)
+			{
+				if (verts[k] == op.v0) verts[k] = n0;
+				else if (verts[k] == op.v1) verts[k] = n1;
+				else if (verts[k] == op.v2) verts[k] = n2;
+			}
+		}
+	}
+
+	const PxU32 stitchedFaces = mergeFragments ? stitchCoincidentComponents(points, indices) : 0;
+	const PxU32 removedTets = deleteSmallFragments
+		? deleteSmallFaceComponents(points, indices, vertexToTet, vertexToTetCount)
+		: 0;
+	printf("[PhysX][VoxelTet] splitRegions=%u splitVerts=%u stitchedFaces=%u removedTets=%u merge=%d delete=%d\n",
+		ops.size(), ops.size() * 3u, stitchedFaces, removedTets, mergeFragments ? 1 : 0, deleteSmallFragments ? 1 : 0);
+}
+
 void physx::Ext::generateVoxelTetmesh(const PxBoundedData& inputPointsOrig, const PxBoundedData& inputTets, PxU32 numVoxelsX, PxU32 numVoxelsY, PxU32 numVoxelsZ,
 	PxArray<PxVec3>& voxelPoints, PxArray<PxU32>& voxelTets, PxI32* intputPointToOutputTetIndex, const PxU32* anchorNodeIndices, PxU32 numTetsPerVoxel,
-	bool avoidVoxelDuplication)
+	bool avoidVoxelDuplication, bool mergeFragments, bool deleteSmallFragments)
 {
 	if (inputTets.count == 0)
 		return; //No input, so there is no basis for creating an output
@@ -2098,11 +2821,14 @@ void physx::Ext::generateVoxelTetmesh(const PxBoundedData& inputPointsOrig, cons
 	scaling = 1.0f / scaling;
 	for(PxU32 i=0;i<voxelPoints.size();++i)
 		voxelPoints[i] = voxelPoints[i] * scaling + origMin;
+
+	// 邻面可能把被拒绝 cluster 的三个角点又收成同一套索引。把多出来的四面体拆到副本顶点上，位置不变。
+	splitOverSharedTetFaces(voxelPoints, voxelTets, intputPointToOutputTetIndex, inputPointsOrig.count, mergeFragments, deleteSmallFragments);
 }
 
 void physx::Ext::generateVoxelTetmesh(const PxBoundedData& inputPoints, const PxBoundedData& inputTets, PxReal voxelEdgeLength,
 	PxArray<PxVec3>& voxelPoints, PxArray<PxU32>& voxelTets, PxI32* intputPointToOutputTetIndex, const PxU32* anchorNodeIndices, PxU32 numTetsPerVoxel,
-	bool avoidVoxelDuplication)
+	bool avoidVoxelDuplication, bool mergeFragments, bool deleteSmallFragments)
 {
 	PxVec3 min, max;
 	minMax(inputPoints, min, max);
@@ -2111,18 +2837,18 @@ void physx::Ext::generateVoxelTetmesh(const PxBoundedData& inputPoints, const Px
 	PxU32 numCellsY = PxMax(1u, PxU32(blockSize.y / voxelEdgeLength + 0.5f));
 	PxU32 numCellsZ = PxMax(1u, PxU32(blockSize.z / voxelEdgeLength + 0.5f));
 
-	generateVoxelTetmesh(inputPoints, inputTets, numCellsX, numCellsY, numCellsZ, voxelPoints, voxelTets, intputPointToOutputTetIndex, anchorNodeIndices, numTetsPerVoxel, avoidVoxelDuplication);
+	generateVoxelTetmesh(inputPoints, inputTets, numCellsX, numCellsY, numCellsZ, voxelPoints, voxelTets, intputPointToOutputTetIndex, anchorNodeIndices, numTetsPerVoxel, avoidVoxelDuplication, mergeFragments, deleteSmallFragments);
 }
 
 void physx::Ext::generateVoxelTetmesh(const PxBoundedData& inputPoints, const PxBoundedData& inputTets, PxU32 numVoxelsAlongLongestBoundingBoxAxis,
 	PxArray<PxVec3>& voxelPoints, PxArray<PxU32>& voxelTets, PxI32* intputPointToOutputTetIndex, const PxU32* anchorNodeIndices, PxU32 numTetsPerVoxel,
-	bool avoidVoxelDuplication)
+	bool avoidVoxelDuplication, bool mergeFragments, bool deleteSmallFragments)
 {
 	PxVec3 min, max;
 	minMax(inputPoints, min, max);	
 	PxVec3 size = max - min;
 	PxReal voxelEdgeLength = PxMax(size.x, PxMax(size.y, size.z)) / numVoxelsAlongLongestBoundingBoxAxis;
-	generateVoxelTetmesh(inputPoints, inputTets, voxelEdgeLength, voxelPoints, voxelTets, intputPointToOutputTetIndex, anchorNodeIndices, numTetsPerVoxel, avoidVoxelDuplication);
+	generateVoxelTetmesh(inputPoints, inputTets, voxelEdgeLength, voxelPoints, voxelTets, intputPointToOutputTetIndex, anchorNodeIndices, numTetsPerVoxel, avoidVoxelDuplication, mergeFragments, deleteSmallFragments);
 }
 	
 static PxReal computeMeshVolume(const PxArray<PxVec3>& points, const PxArray<Triangle>& triangles)
