@@ -86,6 +86,11 @@ void PxgCMGpuDiscreteUpdateBase::processContactManagers(PxgContactManagers& mana
 
 	const PxU32 numTests = managers.mCpuContactManagerMapping.size();
 
+	// Existing pairs are counted after resetSoftBodyClothContactManagers() in the first
+	// narrowphase task; new pairs from the second pass add on top.
+	if (type == GPU_BUCKET_ID::eSoftbodyFemCloth)
+		mContext->getSimulationCore()->addSoftBodyClothContactManagers(numTests);
+
 	if (numTests == 0)
 		return;
 
@@ -395,6 +400,8 @@ void PxgCMGpuDiscreteUpdateTask::runInternal()
 	mContext->removeLostPairs();
 
 	mPostBroadPhaseTask->removeReference();
+
+	mContext->getSimulationCore()->resetSoftBodyClothContactManagers();
 
 	PxgGpuNarrowphaseCore* npCore = mContext->mGpuNarrowphaseCore;
 

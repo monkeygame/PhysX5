@@ -492,6 +492,7 @@ PxgSimulationCore::PxgSimulationCore(PxgCudaKernelWranglerManager* gpuKernelWran
 
 	mNbClothSoftBodyAttachments = 0;
 	mNbClothSoftBodyFilters = 0;
+	mNbSoftBodyClothContactManagers = 0;
 
 	mNbRigidClothAttachments = 0;
 	mNbRigidClothFilters = 0;

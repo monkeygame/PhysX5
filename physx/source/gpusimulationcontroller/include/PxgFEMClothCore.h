@@ -196,6 +196,12 @@ namespace physx
 
 		PxgTypedCudaBuffer<PxU8> mUpdateClothContactPairs; // When set to 1, updates the cloth-cloth contact pairs.
 
+		static const PxU32 eHotSyncEventCount = 8;
+		CUevent mHotSyncEvents[eHotSyncEventCount];
+		PxU32 mHotSyncCursor;
+		void beginHotSync() { mHotSyncCursor = 0; }
+		void syncHot(CUstream parent, CUstream dependent);
+
 		CUevent mSolveRigidEvent;			  // This event is recorded at the solver stream and the cloth stream need to wait for
 											  // that event finish before it processes
 		CUevent mConstraintPrepParticleEvent; // This event is used to synchronize constraint prep(cloth stream) and

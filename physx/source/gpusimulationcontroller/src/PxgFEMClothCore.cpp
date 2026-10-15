@@ -99,6 +99,13 @@ namespace physx
 		mCudaContext->eventCreate(&mConstraintPrepParticleEvent, CU_EVENT_DISABLE_TIMING);
 		mCudaContext->eventCreate(&mSolveParticleEvent, CU_EVENT_DISABLE_TIMING);
 
+		mHotSyncCursor = 0;
+		for (PxU32 i = 0; i < eHotSyncEventCount; ++i)
+		{
+			mHotSyncEvents[i] = NULL;
+			mCudaContext->eventCreate(&mHotSyncEvents[i], CU_EVENT_DISABLE_TIMING);
+		}
+
 		mCudaContextManager->releaseContext();
 	}
 
@@ -115,7 +122,27 @@ namespace physx
 		mCudaContext->eventDestroy(mSolveParticleEvent);
 		mSolveParticleEvent = NULL;
 
+		for (PxU32 i = 0; i < eHotSyncEventCount; ++i)
+		{
+			if (mHotSyncEvents[i])
+				mCudaContext->eventDestroy(mHotSyncEvents[i]);
+			mHotSyncEvents[i] = NULL;
+		}
+
 		mCudaContextManager->releaseContext();
+	}
+
+	void PxgFEMClothCore::syncHot(CUstream parent, CUstream dependent)
+	{
+		if (mHotSyncCursor < eHotSyncEventCount && mHotSyncEvents[mHotSyncCursor])
+		{
+			CUstream parentStream = parent;
+			CUstream dependentStream = dependent;
+			CUevent ev = mHotSyncEvents[mHotSyncCursor++];
+			synchronizeStreams(mCudaContext, parentStream, dependentStream, ev);
+			return;
+		}
+		synchronizeStreams(mCudaContext, parent, dependent);
 	}
 
 	void PxgFEMClothCore::preIntegrateSystems(PxU32 nbActiveFEMCloths, const PxVec3& gravity, PxReal dt)
@@ -1377,6 +1404,8 @@ namespace physx
 		if(nbActiveFEMCloths == 0)
 			return;
 
+		beginHotSync();
+
 		// Ensure the relation v = (x - x0) / dt is maintained at all times, where x0 is:
 		// TGS: The position at the beginning of each sub-timestep.
 		// PGS: The position at the beginning of the entire time step.
@@ -1387,7 +1416,7 @@ namespace physx
 		// Apply additional velocity changes or filtering, such as cloth internal energy damping.
 		solve_velocity(iter, maxIter, dt);
 
-		synchronizeStreams(mCudaContext, mStream, solverStream);
+		syncHot(mStream, solverStream);
 	}
 
 	// Ensure the relation v = (x - x0) / dt is maintained at all times.
@@ -1460,7 +1489,7 @@ namespace physx
 		// refcount phase: both pre-counts populate cloth.mDeltaPos[v].w, both
 		// solves read it, and one finalize closes the phase.
 		{
-			synchronizeStreams(mCudaContext, mStream, solverStream);
+			syncHot(mStream, solverStream);
 
 			// Pre-count refCount per vertex. Both attach + contact bump .w on the
 			// same buffer -- mixed-writer vertices end up with the combined count.
@@ -1499,7 +1528,7 @@ namespace physx
 					// write. Explicit pre-count -> solve barrier, matching the SP path. (Today the
 					// leading sync in solveParticleContactsOutputClothDelta also covers this, but do
 					// not rely on that incidental ordering.)
-					synchronizeStreams(mCudaContext, mStream, particleStream);
+					syncHot(mStream, particleStream);
 
 					// Solve soft body vs particle contact in soft body stream
 					solveParticleContactsOutputClothDelta(particleStream, dt);
@@ -1511,7 +1540,7 @@ namespace physx
 					mCudaContext->streamWaitEvent(mStream, mSolveParticleEvent);
 
 					// Force particle stream to wait for FEM cloth body stream to finish before updating particle states
-					synchronizeStreams(mCudaContext, mStream, particleStream);
+					syncHot(mStream, particleStream);
 
 					// This function is going to update the pos and vel for the FEM verts
 					applyExternalDelta(nbActiveFEMCloths, dt, mStream);

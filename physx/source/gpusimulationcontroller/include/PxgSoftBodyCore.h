@@ -196,6 +196,19 @@ namespace physx
 
 		void querySCContactReferenceCount(const PxReal dt);
 
+		// Reused across TGS/PGS substeps. synchronizeStreams() creates and destroys a
+		// CUDA event per call; destroying a still-queued event drains the device and
+		// turns every cloth-volume substep into a host stall.
+		static const PxU32 eHotSyncEventCount = 24;
+		CUevent mHotSyncEvents[eHotSyncEventCount];
+		PxU32 mHotSyncCursor;
+		void beginHotSync() { mHotSyncCursor = 0; }
+		void syncHot(CUstream parent, CUstream dependent);
+		bool hasClothVolumeCoupling() const;
+		// Attachment and contact stay on mStream, like volume-volume. Cloth FEM
+		// already ran on clothStream this substep; one wait in, one wait out.
+		void solveClothVolumeCoupling(PxU32 nbActiveSoftbodies, PxReal dt);
+
 		//solve soft body vs soft body contact and output to soft body delta buffer
 		void solveSSContactsOutputSoftBodyDelta(const float dt, const bool isTGS);
 

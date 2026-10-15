@@ -109,6 +109,13 @@ namespace physx
 		mCudaContext->eventCreate(&mConstraintPrepSoftBodyParticleEvent, CU_EVENT_DISABLE_TIMING);
 		mCudaContext->eventCreate(&mSolveSoftBodyParticleEvent, CU_EVENT_DISABLE_TIMING);
 
+		mHotSyncCursor = 0;
+		for (PxU32 i = 0; i < eHotSyncEventCount; ++i)
+		{
+			mHotSyncEvents[i] = NULL;
+			mCudaContext->eventCreate(&mHotSyncEvents[i], CU_EVENT_DISABLE_TIMING);
+		}
+
 		const PxU32 contactSize = maxContacts * sizeof(float4);
 
 		//soft body vs cloth contact buffer
@@ -142,6 +149,65 @@ namespace physx
 
 		mCudaContext->eventDestroy(mSolveSoftBodyParticleEvent);
 		mSolveSoftBodyParticleEvent = NULL;
+
+		for (PxU32 i = 0; i < eHotSyncEventCount; ++i)
+		{
+			if (mHotSyncEvents[i])
+				mCudaContext->eventDestroy(mHotSyncEvents[i]);
+			mHotSyncEvents[i] = NULL;
+		}
+	}
+
+	void PxgSoftBodyCore::syncHot(CUstream parent, CUstream dependent)
+	{
+		if (mHotSyncCursor < eHotSyncEventCount && mHotSyncEvents[mHotSyncCursor])
+		{
+			CUstream parentStream = parent;
+			CUstream dependentStream = dependent;
+			CUevent ev = mHotSyncEvents[mHotSyncCursor++];
+			synchronizeStreams(mCudaContext, parentStream, dependentStream, ev);
+			return;
+		}
+		synchronizeStreams(mCudaContext, parent, dependent);
+	}
+
+	bool PxgSoftBodyCore::hasClothVolumeCoupling() const
+	{
+		PxgSimulationCore* core = mSimController->getSimulationCore();
+		return core->getNbClothSoftBodyAttachments() > 0 || core->getNbSoftBodyClothContactManagers() > 0;
+	}
+
+	void PxgSoftBodyCore::solveClothVolumeCoupling(PxU32 nbActiveSoftbodies, PxReal dt)
+	{
+		const PxU32 nbActiveClothes = mSimController->getBodySimManager().mActiveFEMCloths.size();
+		if (nbActiveClothes == 0 || !hasClothVolumeCoupling())
+			return;
+
+		PxgSimulationCore* core = mSimController->getSimulationCore();
+		PxgFEMClothCore* clothCore = mSimController->getFEMClothCore();
+		CUstream clothStream = clothCore->getStream();
+
+		// Cloth FEM for this substep is already queued on clothStream.
+		syncHot(clothStream, mStream);
+
+		if (core->getNbClothSoftBodyAttachments() > 0)
+		{
+			queryClothAttachmentReferenceCount();
+			solveClothAttachmentDelta();
+			applyExternalTetraDeltaGM(nbActiveSoftbodies, dt, mStream);
+			clothCore->applyExternalDelta(nbActiveClothes, dt, mStream);
+		}
+
+		if (core->getNbSoftBodyClothContactManagers() > 0)
+		{
+			querySCContactReferenceCount(dt);
+			solveSCContactsOutputDelta(dt);
+			applyExternalTetraDeltaGM(nbActiveSoftbodies, dt, mStream);
+			clothCore->applyExternalDelta(nbActiveClothes, dt, mStream);
+		}
+
+		// Next cloth substep must see the positions just applied.
+		syncHot(mStream, clothStream);
 	}
 
 
@@ -2853,6 +2919,8 @@ namespace physx
 		if (nbActiveSoftbodies == 0)
 			return;
 
+		beginHotSync();
+
 		//mGpuContext->mGpuArticulationCore->outputVelocity(solverCoreDescd, solerStream, true);
 
 		if (!isVelocityIteration)
@@ -2876,7 +2944,7 @@ namespace physx
 			// Finalize FEM so .w is zero before the pre-counts run.
 			applyExternalTetraDeltaGM(nbActiveSoftbodies, dt, mStream);
 
-			synchronizeStreams(mCudaContext, mStream, solverStream);
+			syncHot(mStream, solverStream);
 
 			// Pre-count refCount per vertex. Both attach + contact bump .w on
 			// the same buffer; mixed-writer vertices end up with the combined count.
@@ -2928,9 +2996,9 @@ namespace physx
 				PxgDevicePointer<PxgParticleSystem> particleSystemd = particleCore->getParticleSystemBuffer().getTypedDevicePtr();
 				PxgDevicePointer<PxU32> activeParticleSystemd = particleCore->getActiveParticleSystemBuffer().getTypedDevicePtr();
 
-				synchronizeStreams(mCudaContext, particleStream, mStream);
+				syncHot(particleStream, mStream);
 
-				synchronizeStreams(mCudaContext, mStream, particleStream);
+				syncHot(mStream, particleStream);
 
 				//This function is going to update the pos and vel for the FEM verts
 				applyExternalTetraDeltaGM(nbActiveSoftbodies, dt, mStream);
@@ -2939,8 +3007,8 @@ namespace physx
 
 				//clothCore->applyExternalDelta(nbActiveClothes, dt, clothStream);
 
-				synchronizeStreams(mCudaContext, solverStream, mStream);
-				synchronizeStreams(mCudaContext, particleStream, mStream);
+				syncHot(solverStream, mStream);
+				syncHot(particleStream, mStream);
 
 				// SP pre-count populates softbody.mSimDelta[v].w for mass-splitting (zeroed by the preceding applyExternalTetraDeltaGM).
 				querySPContactReferenceCount(dt);
@@ -2948,7 +3016,7 @@ namespace physx
 				// The particle-side SP solve (particleStream) reads the soft-body refCount (mSimDelta.w)
 				// the pre-count just wrote on mStream -- order the streams so the read can't race the
 				// write. Only manifests with multiple deformable volumes; one volume happens to be safe.
-				synchronizeStreams(mCudaContext, mStream, particleStream);
+				syncHot(mStream, particleStream);
 
 				//solve soft body vs particle contact in soft body stream
 				solveSPContactsOutputSoftBodyDelta(dt);
@@ -2961,7 +3029,7 @@ namespace physx
 				mCudaContext->streamWaitEvent(mStream, mSolveSoftBodyParticleEvent);
 
 				//Force particle stream to wait for soft body stream to finish
-				synchronizeStreams(mCudaContext, mStream, particleStream);
+				syncHot(mStream, particleStream);
 
 				//This function is going to update the pos and vel for the FEM verts
 				applyExternalTetraDeltaGM(nbActiveSoftbodies, dt, mStream);
@@ -2969,50 +3037,7 @@ namespace physx
 			}
 		}
 
-		{
-			const PxU32 nbActiveClothes = mSimController->getBodySimManager().mActiveFEMCloths.size();
-
-			if (nbActiveClothes > 0)
-			{
-				PX_UNUSED(nbActiveClothes);
-
-				PxgFEMClothCore* clothCore = mSimController->getFEMClothCore();
-				CUstream clothStream = clothCore->getStream();
-
-				synchronizeStreams(mCudaContext, clothStream, mStream);
-
-				// Cloth-softbody attach pre-count onto cloth.mDeltaPos[v].w + softbody.mSimDelta[v].w (each zeroed by its prior finalize).
-				queryClothAttachmentReferenceCount();
-
-				//solve cloth attachment at soft body stream
-				solveClothAttachmentDelta();
-
-				synchronizeStreams(mCudaContext, mStream, clothStream);
-
-				//This function is going to update the pos and vel for the FEM verts
-				applyExternalTetraDeltaGM(nbActiveSoftbodies, dt, mStream);
-
-				clothCore->applyExternalDelta(nbActiveClothes, dt, clothStream);
-
-				synchronizeStreams(mCudaContext, solverStream, mStream);
-				synchronizeStreams(mCudaContext, clothStream, mStream);
-
-				// SB-cloth pre-count populates both .w buffers; SC solve consumes both.
-				querySCContactReferenceCount(dt);
-
-				//solve soft body vs cloth contact in soft body stream
-				solveSCContactsOutputDelta(dt);
-
-				synchronizeStreams(mCudaContext, mStream, clothStream);
-
-				//This function is going to update the pos and vel for the FEM verts
-				applyExternalTetraDeltaGM(nbActiveSoftbodies, dt, mStream);
-
-				clothCore->applyExternalDelta(nbActiveClothes, dt, clothStream);
-
-				synchronizeStreams(mCudaContext, mStream, clothStream);
-			}
-		}
+		solveClothVolumeCoupling(nbActiveSoftbodies, dt);
 	}
 
 
@@ -3031,6 +3056,8 @@ namespace physx
 
 		if (nbActiveSoftbodies == 0)
 			return;
+
+		beginHotSync();
 
 		PxgSimulationCore* core = mSimController->getSimulationCore();
 		PxgSoftBody* softbodiesd = reinterpret_cast<PxgSoftBody*>(core->getSoftBodyBuffer().getDevicePtr());
@@ -3051,7 +3078,7 @@ namespace physx
 			// Finalize FEM so .w is zero before the pre-counts run.
 			applyExternalTetraDeltaGM(nbActiveSoftbodies, dt, mStream);
 
-			synchronizeStreams(mCudaContext, mStream, solverStream);
+			syncHot(mStream, solverStream);
 
 			// Pre-count refCount per vertex. Both attach + contact bump .w on
 			// the same buffer; mixed-writer vertices end up with the combined count.
@@ -3104,17 +3131,17 @@ namespace physx
 				PxgDevicePointer<PxU32> activeParticleSystemd = particleSystemCore->getActiveParticleSystemBuffer().getTypedDevicePtr();
 
 
-				synchronizeStreams(mCudaContext, particleStream, mStream);
+				syncHot(particleStream, mStream);
 
-				synchronizeStreams(mCudaContext, mStream, particleStream);
+				syncHot(mStream, particleStream);
 
 				//This function is going to update the pos and vel for the FEM verts
 				applyExternalTetraDeltaGM(nbActiveSoftbodies, dt, mStream);
 
 				particleSystemCore->applyDeltas(particleSystemd, activeParticleSystemd, nbActiveParticleSystem, dt, particleStream);
 
-				synchronizeStreams(mCudaContext, solverStream, mStream);
-				synchronizeStreams(mCudaContext, particleStream, mStream);
+				syncHot(solverStream, mStream);
+				syncHot(particleStream, mStream);
 
 				// SP pre-count populates softbody.mSimDelta[v].w for mass-splitting (zeroed by the preceding applyExternalTetraDeltaGM).
 				querySPContactReferenceCount(dt);
@@ -3122,7 +3149,7 @@ namespace physx
 				// The particle-side SP solve (particleStream) reads the soft-body refCount (mSimDelta.w)
 				// the pre-count just wrote on mStream -- order the streams so the read can't race the
 				// write. Only manifests with multiple deformable volumes; one volume happens to be safe.
-				synchronizeStreams(mCudaContext, mStream, particleStream);
+				syncHot(mStream, particleStream);
 
 				//solve soft body vs particle contact in soft body stream
 				solveSPContactsOutputSoftBodyDelta(dt);
@@ -3140,55 +3167,11 @@ namespace physx
 			}
 		}
 
-		synchronizeStreams(mCudaContext, mStream, solverStream);
-		
-		{
-			const PxU32 nbActiveClothes = mSimController->getBodySimManager().mActiveFEMCloths.size();
+		syncHot(mStream, solverStream);
 
-			if (nbActiveClothes > 0)
-			{
-				PX_UNUSED(nbActiveClothes);
+		solveClothVolumeCoupling(nbActiveSoftbodies, dt);
 
-				PxgFEMClothCore* clothCore = mSimController->getFEMClothCore();
-				CUstream clothStream = clothCore->getStream();
-
-				synchronizeStreams(mCudaContext, clothStream, mStream);
-
-				// Cloth-softbody attach pre-count onto cloth.mDeltaPos[v].w + softbody.mSimDelta[v].w (each zeroed by its prior finalize).
-				queryClothAttachmentReferenceCount();
-
-				//solve cloth attachment at soft body stream
-				solveClothAttachmentDelta();
-
-				synchronizeStreams(mCudaContext, mStream, clothStream);
-
-				//This function is going to update the pos and vel for the FEM verts
-				applyExternalTetraDeltaGM(nbActiveSoftbodies, dt, mStream);
-
-				clothCore->applyExternalDelta(nbActiveClothes, dt, clothStream);
-
-				//synchronizeStreams(mCudaContext, solverStream, mStream);
-				synchronizeStreams(mCudaContext, clothStream, mStream);
-
-				// SB-cloth pre-count populates both .w buffers; SC solve consumes both.
-				querySCContactReferenceCount(dt);
-
-				//solve soft body vs cloth contact in soft body stream
-				solveSCContactsOutputDelta(dt);
-
-				synchronizeStreams(mCudaContext, mStream, clothStream);
-
-				//This function is going to update the pos and vel for the FEM verts
-				applyExternalTetraDeltaGM(nbActiveSoftbodies, dt, mStream);
-
-				clothCore->applyExternalDelta(nbActiveClothes, dt, clothStream);
-
-				synchronizeStreams(mCudaContext, mStream, clothStream);
-
-			}
-		}
-
-		synchronizeStreams(mCudaContext, mStream, solverStream);
+		syncHot(mStream, solverStream);
 
 	}
 

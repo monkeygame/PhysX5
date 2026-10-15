@@ -356,6 +356,11 @@ namespace physx
 
 		PX_FORCE_INLINE PxU32 getNbClothSoftBodyAttachments() const { return mNbClothSoftBodyAttachments; }
 		PX_FORCE_INLINE PxU32 getNbClothSoftBodyFilters() const { return mNbClothSoftBodyFilters; }
+		// Contact managers scheduled for deformable-volume vs deformable-surface this step.
+		// Zero means the pair was filtered out or the AABBs do not overlap.
+		PX_FORCE_INLINE void resetSoftBodyClothContactManagers() { mNbSoftBodyClothContactManagers = 0; }
+		PX_FORCE_INLINE void addSoftBodyClothContactManagers(PxU32 n) { mNbSoftBodyClothContactManagers += n; }
+		PX_FORCE_INLINE PxU32 getNbSoftBodyClothContactManagers() const { return mNbSoftBodyClothContactManagers; }
 		PX_FORCE_INLINE PxgDevicePointer<PxgFEMFEMAttachment> getClothSoftBodyAttachments() { return mSoftBodyClothAttachments.getTypedDevicePtr(); }
 		PX_FORCE_INLINE PxgDevicePointer<PxU32> getActiveClothSoftBodyAttachments() { return mActiveSoftBodyClothConstraints.getTypedDevicePtr(); }
 		PX_FORCE_INLINE PxgDevicePointer<PxgDbDbAttachmentBlock> getSoftBodyClothAttachmentBlocks() { return mSoftBodyClothAttachmentBlocks.getTypedDevicePtr(); }
@@ -577,6 +582,7 @@ namespace physx
 
 		PxU32			mNbClothSoftBodyAttachments;
 		PxU32			mNbClothSoftBodyFilters;
+		PxU32			mNbSoftBodyClothContactManagers;
 
 		PxU32			mNbRigidClothAttachments;
 		PxU32			mNbRigidClothFilters;
