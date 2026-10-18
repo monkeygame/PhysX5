@@ -566,22 +566,22 @@ void NpDeformableAttachment::updatePose(const PxTransform& pose)
 			PxRigidActor* actor1 = mActor[mActorIndex[1]] == NULL ? NULL : mActor[mActorIndex[1]]->is<PxRigidActor>();
 			Sc::BodyCore* core1 = mActor[mActorIndex[1]] == NULL ? NULL : getBodyCore(actor1);
 
-			for (PxU32 i = 0; i < mHandles.size(); i++)
+			const bool volumeAttachment = (mInternalAttachmentType & NpInternalAttachmentType::eVOLUME_TYPE) != 0;
+			if (!volumeAttachment)
 			{
-				if (mInternalAttachmentType & NpInternalAttachmentType::eSURFACE_TYPE)
+				for (PxU32 i = 0; i < mHandles.size(); i++)
 				{
-					if (mInternalAttachmentType == NpInternalAttachmentType::eSURFACE_TRI_RIGID_BODY)
+					if (mInternalAttachmentType & NpInternalAttachmentType::eSURFACE_TYPE)
 					{
-						getDeformableSurfaceCore(actor0)->removeTriRigidAttachment(core1, mHandles[i]);
+						if (mInternalAttachmentType == NpInternalAttachmentType::eSURFACE_TRI_RIGID_BODY)
+						{
+							getDeformableSurfaceCore(actor0)->removeTriRigidAttachment(core1, mHandles[i]);
+						}
+						else
+						{
+							getDeformableSurfaceCore(actor0)->removeRigidAttachment(core1, mHandles[i]);
+						}
 					}
-					else
-					{
-						getDeformableSurfaceCore(actor0)->removeRigidAttachment(core1, mHandles[i]);
-					}
-				}
-				else if (mInternalAttachmentType & NpInternalAttachmentType::eVOLUME_TYPE)
-				{
-					getDeformableVolumeCore(actor0)->removeRigidAttachment(core1, mHandles[i]);
 				}
 			}
 
@@ -598,7 +598,12 @@ void NpDeformableAttachment::updatePose(const PxTransform& pose)
 
 				actor1Pose = pose.transform(actor1Pose);
 
-				if (mInternalAttachmentType & NpInternalAttachmentType::eSURFACE_TYPE)
+				if (volumeAttachment)
+				{
+					// 四面体编号和重心不变，只改刚体侧目标点。句柄保持不变。
+					getDeformableVolumeCore(actor0)->updateTetRigidAttachment(core1, mHandles[i], actor1Pose);
+				}
+				else if (mInternalAttachmentType & NpInternalAttachmentType::eSURFACE_TYPE)
 				{
 					if (mInternalAttachmentType == NpInternalAttachmentType::eSURFACE_TRI_RIGID_BODY)
 					{
@@ -609,19 +614,6 @@ void NpDeformableAttachment::updatePose(const PxTransform& pose)
 					else
 					{
 						mHandles[i] = getDeformableSurfaceCore(actor0)->addRigidAttachment(core1, id, actor1Pose);
-					}
-				}
-				else if (mInternalAttachmentType & NpInternalAttachmentType::eVOLUME_TYPE)
-				{
-					if (mInternalAttachmentType == NpInternalAttachmentType::eVOLUME_TET_RIGID_BODY)
-					{
-						const PxVec4& barycentric = mCoords[mActorIndex[0]][i];
-
-						mHandles[i] = getDeformableVolumeCore(actor0)->addTetRigidAttachment(core1, id, barycentric, actor1Pose, false);
-					}
-					else
-					{
-						mHandles[i] = getDeformableVolumeCore(actor0)->addRigidAttachment(core1, id, actor1Pose, false);
 					}
 				}
 			}

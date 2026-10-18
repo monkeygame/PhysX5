@@ -238,6 +238,13 @@ PxU32 Sc::DeformableVolumeCore::addTetRigidAttachment(Sc::BodyCore* core, PxU32 
 	return handle;
 }
 
+void Sc::DeformableVolumeCore::updateTetRigidAttachment(Sc::BodyCore* core, PxU32 handle, const PxVec3& actorSpacePose)
+{
+	Sc::DeformableVolumeSim* sim = getSim();
+	if (sim)
+		sim->getScene().updateTetRigidAttachment(core, *sim, handle, actorSpacePose);
+}
+
 void Sc::DeformableVolumeCore::addSoftBodyFilter(Sc::DeformableVolumeCore& core, PxU32 tetIdx0, PxU32 tetIdx1)
 {
 	Sc::DeformableVolumeSim* sim = getSim();

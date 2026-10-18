@@ -350,6 +350,9 @@ namespace physx
 			PxsRigidBody* rigidBody, const PxNodeIndex& rigidNodeIndex, PxU32 tetIdx, const PxVec4& barycentrics, const PxVec3& actorSpacePose,
 			const bool isActive, bool doConversion)	PX_OVERRIDE;
 
+		virtual void updateTetRigidAttachment(Dy::DeformableVolume* deformableVolume,
+			PxsRigidBody* rigidBody, PxU32 handle, const PxVec3& actorSpacePose) PX_OVERRIDE;
+
 		virtual void removeRigidAttachment(Dy::DeformableVolume* deformableVolume, PxU32 handle)	PX_OVERRIDE;
 
 		virtual void addTetRigidFilter(Dy::DeformableVolume* deformableVolume,

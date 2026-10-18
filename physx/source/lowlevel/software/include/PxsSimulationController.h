@@ -331,6 +331,10 @@ namespace physx
 
 		virtual bool					hasDeformableSurfaces()					const	{ return false;	}
 		virtual bool					hasDeformableVolumes()					const	{ return false;	}
+
+		// Appended so existing vtable slots stay put. Writes the rigid-side point in place.
+		virtual void updateTetRigidAttachment(Dy::DeformableVolume* /*deformableVolume*/,
+			PxsRigidBody* /*rigidBody*/, PxU32 /*handle*/, const PxVec3& /*actorSpacePose*/) {}
 #endif
 
 	protected:

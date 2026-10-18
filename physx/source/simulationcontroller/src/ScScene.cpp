@@ -3585,6 +3585,14 @@ void Sc::Scene::removeTetRigidFilter(Sc::BodyCore* core, Sc::DeformableVolumeSim
 	mSimulationController->removeTetRigidFilter(sim.getLowLevelDeformableVolume(), nodeIndex, tetIdx);
 }
 
+void Sc::Scene::updateTetRigidAttachment(Sc::BodyCore* core, Sc::DeformableVolumeSim& sim, PxU32 handle, const PxVec3& actorSpacePose)
+{
+	PxsRigidBody* body = NULL;
+	if (core)
+		body = &core->getSim()->getLowLevelBody();
+	mSimulationController->updateTetRigidAttachment(sim.getLowLevelDeformableVolume(), body, handle, actorSpacePose);
+}
+
 PxU32 Sc::Scene::addTetRigidAttachment(Sc::BodyCore* core, Sc::DeformableVolumeSim& sim, PxU32 tetIdx, const PxVec4& barycentric, const PxVec3& actorSpacePose,
 	bool doConversion)
 {

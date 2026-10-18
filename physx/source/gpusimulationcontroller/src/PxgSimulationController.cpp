@@ -3207,6 +3207,18 @@ namespace physx
 		return handle;
 	}
 
+	void PxgSimulationController::updateTetRigidAttachment(Dy::DeformableVolume* deformableVolume, PxsRigidBody* rigidBody, PxU32 handle, const PxVec3& actorSpacePose)
+	{
+		PX_UNUSED(deformableVolume);
+		const PxHashMap<PxU32, PxU32>::Entry* found = mRigidSoftBodyAttachments.mHandleToAttachmentMapping.find(handle);
+		if (!found)
+			return;
+
+		PxgFEMRigidAttachment& attachment = mRigidSoftBodyAttachments.mAttachments[found->second];
+		attachment.localPose0 = rigidBody ? rigidBody->getCore().getBody2Actor().transformInv(actorSpacePose) : actorSpacePose;
+		mRigidSoftBodyAttachments.mAttachmentsDirty = true;
+	}
+
 	void PxgSimulationController::addSoftBodyFilter(Dy::DeformableVolume* deformableVolume0, Dy::DeformableVolume* deformableVolume1, PxU32 tetId0,
 		PxU32 tetId1)
 	{

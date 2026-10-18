@@ -121,6 +121,7 @@ public:
 
 	PxU32						addTetRigidAttachment(Sc::BodyCore* core, PxU32 tetIdx, const PxVec4& barycentric, const PxVec3& actorSpacePose,
 									bool doConversion);
+	void						updateTetRigidAttachment(Sc::BodyCore* core, PxU32 handle, const PxVec3& actorSpacePose);
 
 	void						addSoftBodyFilter(Sc::DeformableVolumeCore& core, PxU32 tetIdx0, PxU32 tetIdx1);
 	void						removeSoftBodyFilter(Sc::DeformableVolumeCore& core, PxU32 tetIdx0, PxU32 tetIdx1);
