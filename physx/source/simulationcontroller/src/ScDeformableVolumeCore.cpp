@@ -242,7 +242,12 @@ void Sc::DeformableVolumeCore::updateTetRigidAttachment(Sc::BodyCore* core, PxU3
 {
 	Sc::DeformableVolumeSim* sim = getSim();
 	if (sim)
+	{
 		sim->getScene().updateTetRigidAttachment(core, *sim, handle, actorSpacePose);
+		// 旧路径拆掉附着时会把 wake counter 设回 0.4s。就地改目标点不再走 remove，这里补上，
+		// 否则已经睡着的软体不会在下一拍求解新的刚体目标点。
+		setWakeCounterInternal(ScInternalWakeCounterResetValue);
+	}
 }
 
 void Sc::DeformableVolumeCore::addSoftBodyFilter(Sc::DeformableVolumeCore& core, PxU32 tetIdx0, PxU32 tetIdx1)
